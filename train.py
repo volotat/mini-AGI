@@ -91,6 +91,23 @@ def _resync_opt(opt, model, args):
                              "lr": base, "base_lr": base})
 
 
+def _auto_device():
+    """The accelerator to use when the caller did not name one.
+
+    CUDA first: it is the only backend that turns on fused AdamW, bf16
+    autocast and the VRAM telemetry, so a box that has it should train there.
+    MPS next: Apple Silicon can train, but those three CUDA-only paths stay
+    off, so it is a deliberate second choice rather than an accidental one.
+    CPU last: every machine has one, which is why it was the old fallback and
+    why it stays the safety net.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def cmd_stream(args):
     """
     Train the way the model runs: batch 1, a KV cache, one chunk at a time.
@@ -1930,7 +1947,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="train mini-AGI: read files continually, or stream a "
                     "packed corpus. Batch 1, cached, chunked, either way")
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--device", default=_auto_device())
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     rd = sub.add_parser("read",
