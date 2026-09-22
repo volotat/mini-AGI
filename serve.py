@@ -232,11 +232,25 @@ def build_prompt(messages, budget, prime=""):
     return prompt[-budget:] if len(prompt) > budget else prompt
 
 
+def _prefill_cache(model, tokens, chunk=512):
+    """Encode one self-contained window and return its cache and last logits."""
+    if tokens.shape[1] > model.cfg.block:
+        raise ValueError("prefill exceeds the model context")
+    caches = model.empty_caches()
+    logits = None
+    offset = 0
+    chunk = max(1, int(chunk))
+    for i in range(0, tokens.shape[1], chunk):
+        part = tokens[:, i:i + chunk]
+        logits = model(part, caches=caches, pos_offset=offset)[0]
+        offset += part.shape[1]
+    return caches, logits, offset
+
+
 @torch.no_grad()
 def stream(prompt, max_new):
     from minagi.config import get as _g, load as _lc
     from minagi.decode import pick_next
-    from minagi.stream import trim_caches
 
     c = _lc()
     strength = _g(c, "decoding.adapt_strength", 2.5)
@@ -245,22 +259,6 @@ def stream(prompt, max_new):
     # after a hundred characters is not what the prompt alone asked for, and
     # it is a far shorter span than pool.segment_chars, which is for reading.
     reselect = _g(c, "pool.reselect_chars", 64)
-
-    def where(caches):
-        """
-        The position the next character sits at: however much history the
-        cache still holds after trimming.
-
-        NOT a running count. Rotary tables are built for positions 0 to
-        block-1, so a counter that saturates at `block` asks for position
-        `block` on the very next character and the model refuses. Reading it
-        back off the cache cannot drift, because the cache is the thing the
-        positions have to agree with.
-        """
-        for c in caches:
-            if c.get("k") is not None:
-                return c["k"].shape[-2]
-        return 0
 
     model, tok = STATE["model"], STATE["tok"]
     device = next(model.parameters()).device
@@ -275,18 +273,11 @@ def stream(prompt, max_new):
     # keeps a working set steady while reading a stream, because a prompt is a
     # deliberate change of subject.
     model.choose_for(out, free=True)
-    caches = model.empty_caches()
-
     # Prefill in chunks, the way training reads a corpus. Feeding a long
     # prompt in one pass materialises activations for every position across
     # every block application at once, which is what puts a long context out
     # of reach; the cache carries the reach instead.
-    CHUNK = 512
-    logits = None
-    for i in range(0, out.shape[1], CHUNK):
-        part = out[:, i:i + CHUNK]
-        trim_caches(caches, model.cfg.block - part.shape[1])
-        logits = model(part, caches=caches, pos_offset=where(caches))[0]
+    caches, logits, offset = _prefill_cache(model, out)
 
     cur = out[:, -1:]
     produced = []
@@ -304,8 +295,20 @@ def stream(prompt, max_new):
                 yield {"swap": {"at": i, "moved": int(moved),
                                 "pool": resident_experts()}}
         if logits is None:
-            trim_caches(caches, model.cfg.block - cur.shape[1])
-            logits = model(cur, caches=caches, pos_offset=where(caches))[0]
+            if offset + cur.shape[1] > model.cfg.block:
+                # Cached keys have already been rotated at their old positions.
+                # Trimming them and deriving a new offset from the shorter cache
+                # reuses positions and corrupts every relative distance. Start
+                # a self-contained recent window instead, as RecurCoder.generate
+                # does, leaving half the context free before the next rebuild.
+                keep = max(1, model.cfg.block // 2)
+                recent = out[:, -keep:]
+                del caches                 # let the replacement reuse its VRAM
+                caches, logits, offset = _prefill_cache(
+                    model, recent)
+            else:
+                logits = model(cur, caches=caches, pos_offset=offset)[0]
+                offset += cur.shape[1]
         nxt = pick_next(logits[:, -1, :].float(), out, temperature=0.0,
                         adapt_strength=strength, adapt_decay=decay)
         out = torch.cat([out, nxt], dim=1)
