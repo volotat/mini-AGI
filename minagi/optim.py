@@ -33,10 +33,17 @@ class GradSNR:
 
     @torch.no_grad()
     def observe(self, params):
-        gs = [p.grad for p in params if p.grad is not None]
-        if not gs:
+        # A parameter with no gradient contributed a zero gradient this step,
+        # so it is counted as zeros rather than left out. Leaving it out made
+        # the flattened vector change length whenever a parameter sat a step
+        # out - which recurrence depth sampling makes routine: a step sampled
+        # at depth 1 forces the halt, and the halting head receives nothing -
+        # and the running mean then no longer matched it.
+        if all(p.grad is None for p in params):
             return None
-        flat = torch.cat([g.detach().float().reshape(-1) for g in gs])
+        flat = torch.cat([(p.grad if p.grad is not None
+                           else torch.zeros_like(p)).detach().float().reshape(-1)
+                          for p in params])
         self.m = flat.clone() if self.m is None else \
             self.m.mul_(self.beta).add_(flat, alpha=1 - self.beta)
         s = float((flat * flat).sum())
