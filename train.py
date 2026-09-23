@@ -51,6 +51,124 @@ from minagi.optim import GradSNR
 from minagi import store as weights_store
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _digest(path, max_bytes=4 << 20):
+    """A short stamp of a file or directory tree.
+
+    Names, sizes and - for anything small enough - contents. tools/ is
+    untracked, so a commit alone does not name the trainer or the plotters, and
+    a size-only stamp would miss an edit that kept the length.
+    """
+    import hashlib
+
+    h = hashlib.md5()
+
+    def one(p, rel):
+        try:
+            size = os.path.getsize(p)
+        except OSError:
+            return
+        h.update(f"{rel}:{size}".encode())
+        if size > max_bytes:
+            return
+        try:
+            with open(p, "rb") as fh:
+                h.update(hashlib.md5(fh.read()).digest())
+        except OSError:
+            pass
+
+    if os.path.isdir(path):
+        for root, _dirs, files in os.walk(path):
+            for f in sorted(files):
+                p = os.path.join(root, f)
+                one(p, os.path.relpath(p, path))
+    else:
+        one(path, os.path.basename(path))
+    return h.hexdigest()[:8]
+
+
+def _lane_count(data):
+    """How many lanes the reader will actually use.
+
+    A subdirectory is only a lane if it holds files: an empty one is not
+    something the reader can read from, and counting it overstates the run.
+    data/train carries a chat_hermes/ that holds nothing, so it has nine
+    directories but the reader names eight subjects.
+    """
+    try:
+        lanes = []
+        for d in sorted(os.listdir(data)):
+            p = os.path.join(data, d)
+            if os.path.isdir(p) and any(f for _, _, f in os.walk(p)):
+                lanes.append(d)
+        return len(lanes)
+    except OSError:
+        return 0
+
+
+def event_record(man, args, cfg, pool, step, base_chars, ctx_now, info):
+    """What this session started from, as one machine-readable line.
+
+    The held-out curve makes a restart visible and says nothing about what
+    produced it. What decides that is not all in the checkpoint: the routing
+    knobs are runtime settings that config.yaml can change between sessions,
+    and the trainer and the plotters live in tools/, which git does not track.
+    So the stamps are taken here, once per session, at the moment the state is
+    true - reconstructing them afterwards is guesswork, and the guess is always
+    today's configuration rather than the one that ran.
+    """
+    import subprocess
+
+    def git(*argv):
+        try:
+            r = subprocess.run(("git",) + argv, capture_output=True, text=True,
+                               timeout=5, cwd=HERE)
+            return r.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    head = git("rev-parse", "--short", "HEAD") or "no-git"
+    dirty = len([l for l in git("status", "--porcelain").splitlines() if l.strip()])
+    total = max(int(info.get("characters", 1) or 1), 1)
+    return {
+        "when": time.strftime("%Y-%m-%d %H:%M"),
+        "checkpoint": f"{_digest(os.path.join(args.weights_dir, 'manifest.json'))}"
+                      f" (step {int(man.get('step', 0) or 0):,})",
+        "step": int(step),
+        "chars": int(base_chars),
+        # The read path's learning rate is not scheduled at all any more - it
+        # is `lr` governed by held-out loss through the plasticity controller
+        # (see minagi/plasticity.py), which is exactly why `read` carries no
+        # --steps/--warmup. The configured base is the honest value here;
+        # there is no schedule to compute one from.
+        "lr": f"{args.lr:.3e}",
+        "pool": f"{pool.n_experts()} experts, {pool.resident} resident",
+        "routing": (f"margin {pool.margin} dwell {pool.dwell} "
+                    f"explore {pool.explore} key {pool.key_weight} "
+                    f"trial {pool.trial}"
+                    # the hatch is part of the routing policy now, so a
+                    # session record that omitted it would understate what was
+                    # in force
+                    + (f" hatch {pool.hatch_every}/{pool.hatch_cooldown}"
+                       if getattr(pool, "hatch_every", 0) else "")),
+        "context": f"{ctx_now} of {cfg.block}",
+        # The read path takes its corpora as `paths`, a list - see collect()
+        # and _lanes() in cmd_read. `data` belongs to ponder-probe, and
+        # reaching for it here raised AttributeError on the live run.
+        "lane": ", ".join(os.path.basename(str(p).rstrip("/"))
+                          for p in args.paths)
+                + f": {sum(_lane_count(p) for p in args.paths)} lanes",
+        "held_out": f"{os.path.basename(str(args.held_out).rstrip('/'))}: "
+                    f"{_digest(args.held_out)}",
+        "code": f"{head}+{dirty}dirty tools {_digest(os.path.join(HERE, 'tools'))}",
+        "status": ("fresh" if int(step) == 0 and not base_chars else
+                   f"resumed at {base_chars/1e6:.1f}M "
+                   f"({100.0 * base_chars / total:.2f}%)"),
+    }
+
+
 def lr_at(step, total, base, warmup, floor_frac=0.1):
     if step < warmup:
         return base * (step + 1) / warmup
@@ -110,6 +228,14 @@ def cmd_stream(args):
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
 
+    # THE PROCESS-WIDE COMPUTE DTYPE, which this command has never set. Every
+    # forward runs inside `precision.amp()`, and with nothing set it defaults
+    # to fp32 - so `stream` has been computing in fp32 while `read` computes
+    # in bf16, at roughly three times the cost per character and a different
+    # arithmetic from the command the project actually runs.
+    from minagi.precision import set_compute_dtype
+    set_compute_dtype(args.precision)
+
     sources = []
     for part in args.mix.split(","):
         name, _, w = part.partition(":")
@@ -134,9 +260,12 @@ def cmd_stream(args):
     # config every load means the number in the file is the number in effect.
     try:
         from minagi.config import load as _load_cfg, get as _get_cfg
+        _c_cfg = _load_cfg()
         cfg.pool_capacity_factor = float(
-            _get_cfg(_load_cfg(), "pool.capacity_factor",
+            _get_cfg(_c_cfg, "pool.capacity_factor",
                      cfg.pool_capacity_factor))
+        cfg.pool_aux_mode = str(
+            _get_cfg(_c_cfg, "pool.aux_mode", cfg.pool_aux_mode))
     except Exception:
         pass
     model = RecurCoder(cfg).to(device)
@@ -413,7 +542,6 @@ class _Tracer:
             "resident": [int(e) for e in pool.slots if e >= 0],
             "experts": int(pool.n_experts()),
         })
-
     written = False
 
     def write(self, cfg, precision, chunk):
@@ -425,7 +553,6 @@ class _Tracer:
             ids=_np.stack(self.ids), weights=_np.stack(self.wts),
             text=_np.stack(self.text),
             meta=_json.dumps({"chunks": self.meta, "swaps": self.swaps,
-                              "chunk": chunk,
                               "top_k": cfg.pool_top_k,
                               "max_steps": cfg.max_steps,
                               "n_recur": cfg.n_recur, "n_coda": cfg.n_coda,
@@ -656,9 +783,15 @@ def cmd_read(args):
     # working-set decision, which is one per chunk
     pool.margin = args.margin
     pool.dwell = max(1, int(args.dwell) // max(1, args.chunk))
+    pool.hatch_every = max(0, int(args.hatch_every))
+    pool.hatch_cooldown = max(1, int(args.hatch_cooldown))
     print(f"  experts move only on demand: a candidate must be wanted "
           f"{args.margin:.0%} more than the resident it displaces, and a "
           f"newcomer holds its slot for {args.dwell:,} characters ({pool.dwell} chunks)")
+    if pool.hatch_every:
+        print(f"  starvation hatch: one forced replacement every "
+              f"{pool.hatch_every} decisions, cooldown {pool.hatch_cooldown}",
+              flush=True)
 
     if args.no_pool_checkpoint:
         n_off = 0
@@ -670,12 +803,28 @@ def cmd_read(args):
               f"- faster, and it needs the memory depth was using")
     trunk, pool_ps = _split_trunk_pool(model)
 
-    tg = {"params": trunk, "name": "trunk", "weight_decay": args.wd,
-          "lr": args.lr * args.trunk_lr_mult,
-          "base_lr": args.lr * args.trunk_lr_mult}
-    pg = {"params": pool_ps, "name": "pool", "weight_decay": args.wd,
-          "lr": args.lr, "base_lr": args.lr}
-    opt = torch.optim.AdamW([tg, pg], lr=args.lr, betas=(0.9, 0.95),
+    # FOUR GROUPS, not two. A 1-D parameter here is a gain, a gate or a depth
+    # embedding, and decaying one shrinks the thing that SCALES a signal
+    # rather than the signal - which is why `_resync_opt` below already builds
+    # its groups this way, and why the resident builder has done since it was
+    # written (see the pool/trunk split around line 164). This path did not,
+    # so in every paged run `pool.gate` and every call site's `depth_emb` were
+    # pulled toward zero at wd x lr = 3e-5 per step - a factor of e^-5 over
+    # the author's 175,000 steps - on the exact tensor the growth brake and
+    # the pruner read. Nothing reported it; the run just trained a different
+    # model from the one the code implies.
+    def group(params, name, wd, lr):
+        return ({"params": [q for q in params if q.dim() >= 2], "name": name,
+                 "weight_decay": wd, "lr": lr, "base_lr": lr},
+                {"params": [q for q in params if q.dim() < 2], "name": name,
+                 "weight_decay": 0.0, "lr": lr, "base_lr": lr})
+
+    t_lr = args.lr * args.trunk_lr_mult
+    tg, tv = group(trunk, "trunk", args.wd, t_lr)
+    pg, pv = group(pool_ps, "pool", args.wd, args.lr)
+    # the pool's rate is what the progress line reports, and it reads
+    # param_groups[-1], so the 1-D pool group has to stay last
+    opt = torch.optim.AdamW([tg, tv, pg, pv], lr=args.lr, betas=(0.9, 0.95),
                             fused=(device.type == "cuda"))
     snr = GradSNR()
     print(f"  trunk learns at {args.trunk_lr_mult:g}x the pool's rate "
@@ -837,6 +986,23 @@ def cmd_read(args):
                     f"{info['characters']/1e6:,.0f}M characters read "
                     f"({100.0 * base_chars / max(info['characters'], 1):.2f}%), "
                     f"{pool.n_experts()} experts\n")
+            # The same event, machine-readable, with the state that produced
+            # it. A separate line so the banner above keeps matching for
+            # anything already parsing it, and so this can gain fields without
+            # breaking that.
+            #
+            # Guarded because telemetry must never be able to stop a run: an
+            # AttributeError in here killed two children before this was
+            # added. The closing rule stays outside the guard, so the banner
+            # is terminated whether or not the record could be built.
+            try:
+                f.write("# event " + json.dumps(event_record(
+                    man, args, cfg, pool, step, base_chars,
+                    int(man.get("context_now") or args.context_start), info),
+                    sort_keys=True) + "\n")
+            except Exception as e:
+                print(f"  (event record not written: {type(e).__name__}: {e})",
+                      flush=True)
             f.write(f"{'#' * 78}\n")
 
     # The window starts where the model left it, not at the ceiling. RoPE
@@ -868,6 +1034,19 @@ def cmd_read(args):
         print(f"  window held at {ctx_now:,} by --context-end "
               f"(the checkpoint had grown to "
               f"{int(man.get('context_now')):,})")
+    if args.chunk > ctx_now:
+        # THE CURSOR ADVANCES BY `chunk` AND THE WINDOW IS `context` LONG, so
+        # a chunk larger than the window leaves a gap that is never read while
+        # `seen` counts it anyway. At chunk 4096 against a 2048 window the
+        # model trains on the newest 2048 characters of every 4096 and reports
+        # having read all of them - half the corpus, skipped in silence. It is
+        # an easy mistake to make, because raising `chunk` to match `context`
+        # is the single cheapest way to speed reading up.
+        print(f"  [config] --chunk {args.chunk:,} is larger than the "
+              f"{ctx_now:,} window, which would skip text while counting it; "
+              f"reading {ctx_now:,} per step instead. Raise --context-end to "
+              f"match if that is what was meant.", flush=True)
+        args.chunk = ctx_now
     # loss by distance into the window: the chunk index IS the distance, so
     # this costs nothing to collect
     by_pos = collections.defaultdict(list)
@@ -878,6 +1057,17 @@ def cmd_read(args):
         it. Positive means it is using the distance it has - and would use
         more. Near zero means the far end of the window is being carried for
         nothing.
+
+        IT MEASURES VISIT POSITION, NOT WINDOW DEPTH, and the difference is
+        worth knowing before this number is trusted. `by_pos` is keyed by a
+        chunk's index within a visit, so what is compared is the opening of a
+        visit against its later chunks - which is confounded with the text
+        itself, since later chunks are simply different text. The confound is
+        there at every chunk-to-context ratio, so it is not repaired by
+        restricting when this runs; it is a proxy that has been good enough to
+        drive the window from its start to its ceiling, and a real measurement
+        would need the loss as a function of distance into the window rather
+        than of distance into the visit.
         """
         n_buckets = max(2, ctx_now // args.chunk)
         early = [l for p, ls in by_pos.items() if p < n_buckets * 0.5
@@ -920,6 +1110,17 @@ def cmd_read(args):
     turn = visit_chunks(ctx_now)
     wants_more = False          # whether the evidence says to keep growing
     target = info["characters"] * max(1, args.passes)
+    if args.chars:
+        # A MILESTONE, NOT A SESSION LENGTH. `--chars` is how much the model
+        # should have read IN TOTAL, counting every earlier session, so a run
+        # paused at 199M and resumed still finishes at 200M. Counting per
+        # session would move the finish line every time a long run was
+        # interrupted, which is the one thing a long run reliably does.
+        target = max(0, int(args.chars) - base_chars)
+        if target <= 0:
+            print(f"  already at {base_chars/1e6:.1f}M of the "
+                  f"{args.chars/1e6:.0f}M character target - nothing to do")
+            return 0
     print(f"  {len(lanes)} subjects, reading {turn * args.chunk:,} characters "
           f"from one before moving to the next"
           + (f" ({turn * args.chunk // ctx_now} windows of {ctx_now:,})"
@@ -955,6 +1156,21 @@ def cmd_read(args):
             os.makedirs(os.path.dirname(args.history) or ".", exist_ok=True)
             with open(args.history, "a") as f:
                 f.write(json.dumps(row, separators=(",", ":")) + "\n")
+            # What the starvation hatch did since the last row: who it seated,
+            # who it displaced, and the two want scores that decided it. Its
+            # own file, joined to the sample log on `step` for the numbers that
+            # live there (held-out, routing drop).
+            if getattr(pool, "hatch_log", None):
+                hpath = os.path.join(os.path.dirname(args.history) or ".",
+                                     "hatch.jsonl")
+                try:
+                    with open(hpath, "a") as hf:
+                        for ev in pool.hatch_log:
+                            hf.write(json.dumps(ev, separators=(",", ":"))
+                                     + "\n")
+                    pool.hatch_log.clear()
+                except OSError as e:
+                    print(f"    (hatch log not written: {e})", flush=True)
         except Exception as e:                  # telemetry must never stop a run
             print(f"    (history not written: {e})", flush=True)
 
@@ -1110,6 +1326,7 @@ def cmd_read(args):
                     last_sample = time.time()
                     v_ = se_ = None
                     dom = None
+                    t_phase = time.time()
                     if ev is not None:
                         d = ev.run(sample_eval_steps)
                         se_ = d.pop("stderr", None)
@@ -1124,12 +1341,20 @@ def cmd_read(args):
                         moved_lr = plast.observe(v_, se_)
                         if moved_lr:
                             print(f"    {moved_lr}", flush=True)
+                    t_eval = time.time() - t_phase
                     s = sample_now(model, tok, device, args.sample_chars,
                                    variants=_sample_variants(args))
+                    t_samp = time.time() - t_phase - t_eval
                     dt = max(time.time() - mark_t, 1e-6)
                     rate = (seen - mark_c) / dt
                     mark_t, mark_c = time.time(), seen
                     tr = float(np.mean(recent)) if recent else None
+                    # Read the drop counters ONCE. Both the log entry and the
+                    # progress line below report them, and reading consumes
+                    # them, so a second read would show zero.
+                    drop = (model.pool_dropped()
+                            if hasattr(model, "pool_dropped") else None)
+                    rp = pool.report()
                     write_samples(args.sample_log, step, base_chars + seen,
                                   (time.time() - t0) / 60, s, v_, se_, dom,
                                   pool.n_experts(), tr,
@@ -1137,8 +1362,9 @@ def cmd_read(args):
                                   info["characters"], ctx_now, ctx_max,
                                   context_gain(), rate,
                                   float(np.mean(grads)) if grads else None,
-                                  args.clip, plast.state())
-                    rp = pool.report()
+                                  args.clip, plast.state(),
+                                  dropped=(drop[0] if drop else None),
+                                  paging=rp)
                     print(f"    samples -> {args.sample_log}"
                           + (f"  train {float(np.mean(recent)):.4f}"
                              if recent else "")
@@ -1149,7 +1375,14 @@ def cmd_read(args):
                             f"onto the card per chunk, RAM hit rate "
                             f"{rp['hit_rate']:.2f}"
                           + f"  | context {ctx_now:,}  {rate:,.0f} char/s"
-                          + _dropped_note(model)
+                          + _dropped_note(model, drop)
+                          # The rate above divides characters READ by the
+                          # WHOLE interval, and the held-out eval and the
+                          # sample generation both sit inside it - so a slow
+                          # eval looks exactly like slow reading, and nothing
+                          # else in the log can tell the two apart afterwards.
+                          + f"  | {dt:.0f}s interval: eval {t_eval:.0f}s, "
+                            f"sample {t_samp:.0f}s"
                           + f"  ({(time.time()-t0)/60:.0f} min)", flush=True)
                     if args.save:
                         checkpoint(v_)
@@ -1309,7 +1542,12 @@ def cmd_read(args):
         # them dropped read_pass/read_file from the manifest, so a run that
         # finished normally sent the next one back to the first file - only a
         # run killed between checkpoints resumed where it had got to.
-        weights_store.save(model, wdir, step=step, val=None,
+        #
+        # `after` goes in as the held-out score. It used to be None, which
+        # both lost the number and broke `store.best_val()` for anything that
+        # wanted to fall back to this directory later.
+        weights_store.save(model, wdir, step=step,
+                           val=(after if ev is not None else None),
                            opt=opt, cfg=asdict(cfg), verbose=True,
                            extra={"read_chars": base_chars + seen,
                                   "read_nats": nats,
@@ -1561,21 +1799,27 @@ def sample_now(model, tok, device, n_new=140, variants=None):
 # which is nothing against a ten-minute sample interval, but a training step
 # should not be held up by matplotlib, and a plotting bug must not be able to
 # stop a run that has been going for days.
-def _dropped_note(model):
+def _dropped_note(model, seen=None):
     """What the capacity bound threw away since the last sample, or nothing.
 
     Silent when it is zero, which is the common case and the case that needs
     no words. `self.dropped` was counted in the dispatch and read nowhere for
     as long as it existed, so the one trade `pool.capacity_factor` makes had
     no number attached to it.
+
+    `seen` is a tuple already read from the model, for a caller that wants the
+    figure in two places. Reading it consumes the counters, so a second read
+    returns zero and the number would quietly disappear from one of them.
     """
-    fn = getattr(model, "pool_dropped", None)
-    if fn is None:
-        return ""
-    try:
-        share, dropped, routed = fn()
-    except Exception:
-        return ""
+    if seen is None:
+        fn = getattr(model, "pool_dropped", None)
+        if fn is None:
+            return ""
+        try:
+            seen = fn()
+        except Exception:
+            return ""
+    share, dropped, routed = seen
     if not routed or not dropped:
         return ""
     return (f"  | capacity dropped {share:.2%} of routing "
@@ -1597,6 +1841,14 @@ def refresh_plots():
     here = os.path.dirname(os.path.abspath(__file__))
     tool = os.path.join(here, "tools", "plot_progress.py")
     if not os.path.exists(tool):
+        # Say so once. `--plots` is on by default, so on a checkout without
+        # tools/ the graphs simply never appear and nothing explains why -
+        # the run looks like it is drawing them and is not.
+        if not _PLOTS.get("warned"):
+            _PLOTS["warned"] = True
+            print(f"  [note] {os.path.relpath(tool, here)} is not in this "
+                  f"checkout, so --plots draws nothing; pass --no-plots to "
+                  f"stop asking", flush=True)
         _PLOTS["on"] = False
         return
     log = _PLOTS["log"] or "runs/samples.txt"
@@ -1635,7 +1887,8 @@ def refresh_plots():
 def write_samples(path, step, chars, minutes, samples, val=None, se=None,
                   per_domain=None, experts=None, train=None, lr=None,
                   corpus=None, context=None, ceiling=None, gain=None,
-                  rate=None, gnorm=None, clip=None, plast=None):
+                  rate=None, gnorm=None, clip=None, plast=None,
+                  dropped=None, paging=None):
     with open(path, "a") as f:
         f.write(f"\n{'=' * 78}\n")
         # How much has been read, against how much there is. A bare count of
@@ -1712,6 +1965,30 @@ def write_samples(path, step, chars, minutes, samples, val=None, se=None,
             if per_domain:
                 f.write("  " + "   ".join(
                     f"{k} {v:.3f}" for k, v in sorted(per_domain.items())) + "\n")
+        # WHAT THE DISPATCH DID, which used to go only to stdout and so was
+        # never kept. The share of routing the capacity bound discarded is the
+        # measurement `pool.capacity_factor` is a trade about: the padded
+        # rectangle the dispatch multiplies is sized by the BUSIEST expert, so
+        # a router that concentrates makes the same arithmetic cost more and
+        # deliver less. Without it in the log, a run cannot be asked afterwards
+        # whether its pool was used at the width it was built for.
+        if dropped is not None or paging:
+            bits = []
+            if dropped is not None:
+                bits.append(f"capacity dropped {dropped:.1%} of routing")
+            if paging:
+                bits.append(
+                    f"{paging.get('disk_reads', 0)} expert reads, "
+                    f"{paging.get('evictions', 0)} evictions, "
+                    f"{paging.get('writebacks', 0)} writebacks, "
+                    # The ratio is hits/(reads+hits) with a cumulative
+                    # numerator, so it saturates at 100% the moment the pool
+                    # fits in the cache and then says nothing. The occupancy
+                    # is what tells you whether the tier is doing any work.
+                    f"RAM hit {paging.get('hit_rate', 0):.0%} "
+                    f"({paging.get('ram_held', 0)} of "
+                    f"{paging.get('ram_capacity', 0)} held)")
+            f.write("   ".join(bits) + "\n")
         # The repeat rate on the UNGUARDED reading, averaged over the
         # prompts. This is a fact about the model - how often it falls into
         # saying what it has just said - and the number a better model should
@@ -1809,9 +2086,12 @@ def build_paged(wdir, device, resident=None, ram_capacity=256, ceiling=None,
     # config every load means the number in the file is the number in effect.
     try:
         from minagi.config import load as _load_cfg, get as _get_cfg
+        _c_cfg = _load_cfg()
         cfg.pool_capacity_factor = float(
-            _get_cfg(_load_cfg(), "pool.capacity_factor",
+            _get_cfg(_c_cfg, "pool.capacity_factor",
                      cfg.pool_capacity_factor))
+        cfg.pool_aux_mode = str(
+            _get_cfg(_c_cfg, "pool.aux_mode", cfg.pool_aux_mode))
     except Exception:
         pass
     # the per-token router keeps one row per EXPERT, not per VRAM slot, so it
@@ -1834,15 +2114,27 @@ def build_paged(wdir, device, resident=None, ram_capacity=256, ceiling=None,
         # nothing else. The window the reader actually uses is separate, and
         # grows a character at a time.
         cfg.block = int(ceiling)
-    model = RecurCoder(cfg).to(device)
+    # BUILD ON THE CPU AND SWAP THE POOL BEFORE ANYTHING REACHES THE CARD.
+    # `RecurCoder` constructs a resident `SharedPool` whenever `use_pool` is
+    # set, and this function throws it away one line later in favour of the
+    # paged one. Constructing it on the device put the whole resident pool -
+    # 805 MB at 64 experts, 2.25 GB at the author's 179 - into the card's
+    # peak, and `pool._mem_frac()` reads `max_memory_allocated()` with no
+    # reset anywhere, so the growth brake was reading a high-water mark that
+    # included a pool which no longer existed. Building it in host memory and
+    # dropping the reference before `to(device)` costs the same transient
+    # allocation off the card and leaves the brake's number honest.
+    model = RecurCoder(cfg)
     pool = PagedPool(os.path.join(wdir, "experts"), cfg.d_model, cfg.pool_d_ff,
                      int(man["n_experts"]), resident=resident,
                      ram_capacity=ram_capacity, device=device,
-                     read_only=read_only).to(device)
+                     read_only=read_only)
     for m in model.modules():
         if isinstance(m, PooledMLP):
             m._pool[0] = pool
     model.pool = pool
+    model.to(device)
+    pool.to(device)
     pool.attach_sites(model)
     pool.load_telemetry(man.get("telemetry"))
     ever = cfgd.get("pool_ever")
@@ -1954,6 +2246,11 @@ def main():
     rd.add_argument("--weights-dir", default=_cfg(_c, "data.weights", "weights"))
     rd.add_argument("--passes", type=int, default=1,
                     help="how many times to read the whole set")
+    rd.add_argument("--chars", type=int, default=0,
+                    help="stop once the model has read this many characters "
+                         "IN TOTAL, counting what earlier sessions read - so "
+                         "pausing and resuming does not move the finish line. "
+                         "0 means use --passes instead")
     rd.add_argument("--chunk", type=int,
                     default=_cfg(_c, "training.chunk", 512))
     rd.add_argument("--lr", type=float,
@@ -2066,6 +2363,13 @@ def main():
     # explicitly rather than left to be discovered.
     rd.add_argument("--dwell", dest="dwell_retired", type=int, default=None,
                     help=argparse.SUPPRESS)
+    rd.add_argument("--hatch-every", type=int,
+                    default=_cfg(_c, "pool.hatch_every", 16),
+                    help="decisions between forced replacements for starved "
+                         "experts, at most one each; 0 disables")
+    rd.add_argument("--hatch-cooldown", type=int,
+                    default=_cfg(_c, "pool.hatch_cooldown", 32),
+                    help="decisions before a seated expert may be seated again")
     rd.add_argument("--dwell-chars", dest="dwell", type=int,
                     default=_cfg(_c, "pool.dwell_chars",
                                  _cfg(_c, "pool.dwell", 4) * 512),
@@ -2235,6 +2539,14 @@ def main():
     st.add_argument("--warmup", type=int, default=200)
     st.add_argument("--wd", type=float, default=0.1)
     st.add_argument("--clip", type=float, default=1.0)
+    st.add_argument("--precision", default=_cfg(_c, "training.precision",
+                                                "bf16"),
+                    choices=["bf16", "fp16", "fp32"],
+                    help="what the forward computes in; weights stay fp32. "
+                         "This command ran fp32 whatever config.yaml said, "
+                         "because it never called set_compute_dtype - so it "
+                         "cost about three times what `read` costs per "
+                         "character and used different arithmetic from it")
     st.add_argument("--seed", type=int, default=0)
     st.add_argument("--log-every", type=int, default=100)
     st.add_argument("--eval-every", type=int, default=1000)

@@ -3,16 +3,16 @@ Build the whole training corpus in one command.
 
     python3 -m corpora all
 
-The model reads eight subjects in round-robin, and each takes an EQUAL share
+The model reads nine subjects in round-robin, and each takes an EQUAL share
 of the reading however much of it exists. A lane ten times larger than another
 is therefore not read ten times as much - it is read ten times less
 thoroughly. That is why the defaults here sample rather than take everything:
 there is little point pulling all of Wikipedia before the model has been
 through any of it. `--full` takes the lot.
 
-Four lanes come down from Hugging Face. Four are made here from things already
-on the machine - Python packages for code, a PGN for chess, and pure synthesis
-for arithmetic and the self-knowledge turns.
+Four lanes come down from Hugging Face. Five are made here from things already
+on the machine - Python packages for code and for the conversation turns, a
+PGN for chess, and pure synthesis for arithmetic and the self-knowledge turns.
 
 A lane that already has files is left alone, so an interrupted build can
 simply be run again; `--force` rebuilds it anyway. A lane that fails does not
@@ -29,11 +29,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # name -> (where it lands, what makes it)
 # Sampled sizes first, then what --full uses instead (0 meaning everything).
-LANES = ["wikipedia", "stories", "chat", "reasoning",
+LANES = ["wikipedia", "stories", "chat", "chat_hermes", "reasoning",
          "arithmetic", "code", "chess", "self-knowledge"]
 
 SAMPLED = {"wikipedia": 120_000, "stories": 400_000,
-           "chat": 200_000, "reasoning": 20_000}
+           "chat_hermes": 200_000, "reasoning": 20_000}
 
 
 def _has_files(d):
@@ -83,11 +83,11 @@ def build_stories(limit):
                 "--held-out", "data/val/stories")
 
 
-def build_chat(limit):
+def build_chat_hermes(limit):
     return _sub("fetch", "--dataset", "teknium/OpenHermes-2.5",
                 "--kind", "chat", "--limit", limit, "--hold", _hold(limit),
-                "--out", "data/train/chat/hermes",
-                "--held-out", "data/val/chat")
+                "--out", "data/train/chat_hermes",
+                "--held-out", "data/val/chat_hermes")
 
 
 def build_reasoning(limit):
@@ -98,6 +98,23 @@ def _generated(target, expand_as, *extra):
     """A lane written as .bin by a generator, then expanded to text."""
     rc = _sub(target, *extra)
     return rc or _sub("expand", "--only", expand_as)
+
+
+def build_chat(limit):
+    """
+    The conversation lane: turns mined from local Python, plus arithmetic
+    phrased as dialogue.
+
+    OpenHermes used to be fetched into this lane, at `data/train/chat/hermes`.
+    A subject is a top-level folder, so that made one subject out of two
+    corpora; OpenHermes has a lane of its own now and this one holds only the
+    turns written here. The harvest has to shrink with `--limit` too, or a
+    trial run would still read every Python file on the machine.
+    """
+    n = limit or 400_000
+    return _generated("chat", "chat", "--conversations", n,
+                      "--max-pairs", max(1000, n // 2),
+                      "--val", max(200, n // 200))
 
 
 def build_arithmetic(limit):
@@ -114,14 +131,25 @@ def build_chess(_):
     return _generated("chess", "chess")
 
 
-def build_self_knowledge(_):
-    return _generated("chat", "chat")
+def build_self_knowledge(limit):
+    """
+    The turns in which the model describes itself.
+
+    Written by the chat generator, but as its own stream: they are a fifth of
+    a mixed conversation, and a fifth of one is not a subject the model can be
+    scored on. Nothing is downloaded or harvested for this lane.
+    """
+    n = limit or 40_000
+    return _generated("chat", "self-knowledge", "--self-knowledge",
+                      "--out", "data_self_char", "--conversations", n,
+                      "--val", max(200, n // 200))
 
 
 BUILDERS = {
     "wikipedia":      (build_wikipedia,      "data/train/wikipedia"),
     "stories":        (build_stories,        "data/train/stories"),
-    "chat":           (build_chat,           "data/train/chat/hermes"),
+    "chat":           (build_chat,           "data/train/chat"),
+    "chat_hermes":    (build_chat_hermes,    "data/train/chat_hermes"),
     "reasoning":      (build_reasoning,      "data/train/reasoning"),
     "arithmetic":     (build_arithmetic,     "data/train/arithmetic"),
     "code":           (build_code,           "data/train/code"),
@@ -153,8 +181,8 @@ def main():
     except ImportError:
         print("the downloaded lanes need the datasets package:\n"
               "    pip install datasets", file=sys.stderr)
-        if not a.only or set(a.only) & {"wikipedia", "stories", "chat",
-                                        "reasoning"}:
+        if not a.only or set(a.only) & {"wikipedia", "stories",
+                                        "chat_hermes", "reasoning"}:
             return 1
 
     wanted = a.only or LANES

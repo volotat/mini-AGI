@@ -24,6 +24,11 @@ FORMAT
     </bot>
 
     python3 -m corpora chat
+    python3 -m corpora chat --self-knowledge --out data_self_char
+
+The second form writes the turns in which the model describes itself, alone.
+They are a fifth of a mixed conversation and cannot be lifted back out of one
+after the fact, so the lane that is only about them needs its own stream.
 """
 
 import os
@@ -416,11 +421,20 @@ def render_seed_turn(rng):
     return f"{U0}\n{q}\n{U1}\n{B0}\n{a}\n{B1}\n"
 
 
-def build_conversation(pairs, rng, max_turns=4):
-    """Stack several turns so the model learns multi-turn structure."""
+def build_conversation(pairs, rng, max_turns=4, self_only=False):
+    """
+    Stack several turns so the model learns multi-turn structure.
+
+    `self_only` keeps just the model's account of itself. The chat lane wants
+    the mixture, but the corpus also has a `self-knowledge` subject, and a
+    fifth of a conversation is not a corpus that can be separated out later.
+    """
     n = rng.randint(1, max_turns)
     out = []
     for _ in range(n):
+        if self_only:
+            out.append(render_seed_turn(rng))
+            continue
         r = rng.random()
         # the self-knowledge turns carry the model's account of its own
         # architecture, so they get a fifth of the conversation rather than the
@@ -446,26 +460,39 @@ def main():
     ap.add_argument("--val", type=int, default=4000)
     ap.add_argument("--max-pairs", type=int, default=200000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--self-knowledge", action="store_true",
+                    help="write only the turns in which the model describes "
+                         "itself, for the corpus lane that is about nothing "
+                         "else. Nothing is mined from source in this mode")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    print("harvesting docstring/implementation pairs from local Python ...")
-    t0 = time.time()
-    pairs = harvest(max_pairs=args.max_pairs)
-    print(f"  {len(pairs):,} pairs in {time.time()-t0:.1f}s")
-    if not pairs:
-        print("no pairs harvested", file=sys.stderr)
-        return 1
-    print("\nexamples:")
-    for p in pairs[:3]:
-        print(f"  {p['name']}: {p['doc'][:70]}")
+    if args.self_knowledge:
+        # No harvest: every turn in this stream is a question from SEED, so
+        # reading the machine's Python would be work done and thrown away.
+        pairs = []
+        print(f"writing {len(SEED):,} self-knowledge questions as their own "
+              f"corpus")
+    else:
+        print("harvesting docstring/implementation pairs from local "
+              "Python ...")
+        t0 = time.time()
+        pairs = harvest(max_pairs=args.max_pairs)
+        print(f"  {len(pairs):,} pairs in {time.time()-t0:.1f}s")
+        if not pairs:
+            print("no pairs harvested", file=sys.stderr)
+            return 1
+        print("\nexamples:")
+        for p in pairs[:3]:
+            print(f"  {p['name']}: {p['doc'][:70]}")
 
     from minagi.tokenizer import ByteTokenizer
     tok = ByteTokenizer()
 
     rng = random.Random(args.seed)
     print("\nsample conversation:")
-    print(textwrap.indent(build_conversation(pairs, rng)[:600], "  "))
+    print(textwrap.indent(build_conversation(
+        pairs, rng, self_only=args.self_knowledge)[:600], "  "))
 
     for split, count in (("train", args.conversations), ("val", args.val)):
         path = os.path.join(args.out, f"{split}.bin")
@@ -473,7 +500,8 @@ def main():
         with open(path, "wb") as f:
             batch = []
             for i in range(count):
-                batch.append(build_conversation(pairs, rng))
+                batch.append(build_conversation(
+                    pairs, rng, self_only=args.self_knowledge))
                 if len(batch) >= 2048:
                     for enc in tok.encode_batch(batch):
                         a = np.array(enc.ids, dtype=np.uint16)

@@ -64,6 +64,15 @@ pool:
   capacity_factor: 1.5    # most of a batch one expert may take, as a multiple
                           # of its fair share; the rest is dropped. 0 removes
 
+  # WHICH HISTOGRAM THE LOAD-BALANCING LOSS SEES. `switch` counts every
+  # assignment the dispatch will make - all top_k of them - which is the load
+  # the capacity bound above actually truncates. `top1` counts only each
+  # character's best expert, which is what it did until the drop rate was
+  # measured: on real text that was 33-39% of assignments discarded at
+  # capacity_factor 1.5. `top1` is kept so a run can be compared against the
+  # published numbers, which were produced with it.
+  aux_mode: switch
+
   # Text one working-set decision covers. Two values, because reading and
   # writing ask different things of it: a reader stays on one subject for a
   # whole passage, while a reply changes subject with the prompt and drifts
@@ -75,6 +84,30 @@ pool:
                           # displace a resident
   dwell_chars: 2048       # how long a newcomer is safe from eviction
   explore: 0.15           # random admissions on the older segment-router path
+
+  # THE STARVATION HATCH. Every expert gets one turn on the card from the
+  # cold-start sweep, and that sweep is finite by design. Measured on the
+  # live run, that one turn is all most of them ever get: the demand scores
+  # are near-tied - the best non-resident candidate sits within 3% of the
+  # weakest resident - while the ordinary path demands a candidate be 10%
+  # more wanted than the resident it displaces. So the near-tie is decided
+  # for the incumbent every time, and 97% of the starved cohort never gets a
+  # slot on its own. This is a bounded route back in: at most one forced
+  # replacement every `hatch_every` decisions, for growth-born or
+  # low-admission experts, chosen fewest-admissions-first.
+  #
+  # Measured at the live dwell, over 127 decisions, of 89 starved experts:
+  #   hatch_every 64 -> 3    (indistinguishable from the baseline's 2)
+  #   hatch_every 32 -> 5
+  #   hatch_every 16 -> 9    the first live setting
+  #   hatch_every  8 -> 12   aggressive: ~4x the baseline's movement
+  # 0 disables. The victim is the weakest evictable resident, so the churn
+  # lands at the bottom of the working set rather than on the core.
+  hatch_every: 16
+  # Decisions before a seated expert may be seated again. Kept separate from
+  # dwell_chars below, which is in characters and floors to one chunk at a
+  # 4096-char chunk - tying the cooldown to it would leave none at all.
+  hatch_cooldown: 32
 
 training:
   save_every: 5           # minutes between checkpoints

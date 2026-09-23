@@ -121,6 +121,15 @@ def main():
           f"to {a.held_out}, {chars/1e6:,.1f}M characters"
           f"  ({skipped:,} skipped)", flush=True)
     print(f"  median trace is about {chars//max(n,1):,} characters", flush=True)
+    # A STREAMED dataset leaves a worker thread alive, and CPython aborts while
+    # finalising it: "PyGILState_Release: thread state ... must be current when
+    # releasing". That abort lands AFTER every file is written, so the lane
+    # does its whole job and then reports failure with exit 134 - which reads
+    # as a broken lane and hides a complete one. fetch.py exits the same way
+    # for the same reason. Nothing below has anything left to clean up.
+    if a.stream:
+        sys.stdout.flush()
+        os._exit(0)
     return 0
 
 

@@ -91,13 +91,18 @@ class Tiers:
         file the whole of what that expert is, which is what the weights
         directory claims about itself.
         """
+        # np.load already hands back a fresh array per member - it decompresses
+        # the whole entry into a new buffer - so from_numpy owns it and the
+        # copy that used to be here was 25 MB of memcpy per cold admission for
+        # nothing. Confirmed by mutating a fetched expert and re-reading it.
         z = np.load(self._file(i))
-        out = {k: torch.from_numpy(z[k]).clone() for k in ("w1", "w3", "w2")}
+        out = {k: torch.from_numpy(z[k]) for k in ("w1", "w3", "w2")}
         for k in ("w1_m", "w3_m", "w2_m", "w1_v", "w3_v", "w2_v"):
             if k in z.files:
                 # bf16 if this file has been written since the moments were
-                # narrowed, fp32 if it has not; unpack_bf16 reads both
-                out[k] = unpack_bf16(z[k]).clone()
+                # narrowed, fp32 if it has not; unpack_bf16 reads both, and it
+                # allocates the fp32 result, so no clone is needed here either
+                out[k] = unpack_bf16(z[k])
         return out
 
     def fetch(self, i):
@@ -126,7 +131,18 @@ class Tiers:
             j, ent = self.ram.popitem(last=False)      # least recently used
             self.evictions += 1
             if j in self.dirty:
-                self._to_disk(j, ent)
+                try:
+                    self._to_disk(j, ent)
+                except OSError:
+                    # A failed write used to drop the expert and leave it in
+                    # `dirty`, so the next flush looked up a key that was no
+                    # longer in RAM and died on a KeyError that named neither
+                    # the expert nor the disk. Put it back and let the real
+                    # error through: over capacity is recoverable, a lost
+                    # expert is not.
+                    self.ram[j] = ent
+                    self.ram.move_to_end(j, last=False)
+                    raise
                 self.dirty.discard(j)
 
     def _to_disk(self, i, ent):
@@ -140,7 +156,14 @@ class Tiers:
         arrays = {k: (pack_bf16(v) if is_moment(k) else v.to(torch.float32).numpy())
                   for k, v in ent.items() if torch.is_tensor(v)}
         tmp = self._file(i) + ".tmp.npz"
-        np.savez(tmp, **arrays)
+        try:
+            np.savez(tmp, **arrays)
+        except BaseException:
+            # an orphaned *.tmp.npz is counted as an expert by anything that
+            # globs the directory, so it must not outlive the attempt
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
         os.replace(tmp, self._file(i))
         self.writebacks += 1
 
@@ -148,7 +171,13 @@ class Tiers:
         if self.read_only:
             return
         for i in list(self.dirty):
-            self._to_disk(i, self.ram[i])
+            ent = self.ram.get(i)
+            if ent is None:
+                # its write already happened on eviction; `_trim` only leaves
+                # this set on a successful write
+                self.dirty.discard(i)
+                continue
+            self._to_disk(i, ent)
         self.dirty.clear()
 
     def report(self):
@@ -223,6 +252,15 @@ class PagedPool(nn.Module):
         # they are what stops the working set churning on noise.
         self.margin = 0.10
         self.dwell = 4
+        # The starvation hatch. At most one forced replacement every
+        # `hatch_every` decisions, for experts that have been admitted and
+        # never earned meaningful traffic. 0 disables it. The cooldown is its
+        # own number rather than `dwell` on purpose: dwell is configured in
+        # characters and floors to one chunk at a 4096-char chunk, so tying the
+        # cooldown to it would leave no anti-thrash protection at all.
+        self.hatch_every = 0
+        self.hatch_cooldown = 32
+        self.hatch_log = []          # recent hatches, drained by the reader
         self.register_buffer("ever", torch.zeros(n_experts, dtype=torch.bool),
                              persistent=False)
         # What each expert responds to, derived from its own weights.
@@ -412,7 +450,44 @@ class PagedPool(nn.Module):
 
 
     def stacked(self):
-        return [(self.w1, self.w3, self.w2)]
+        """
+        The expert weights the dispatch multiplies against, cast once.
+
+        The dispatch runs in bf16 and the masters are fp32, so the cast has to
+        happen somewhere - but it does not have to happen once per ROW.
+        `PooledMLP.forward` calls this for every block application, so the
+        whole stack - 3 x resident x d_ff x d_model - was being re-cast and
+        re-materialised 41 times per step for a quantity that cannot change
+        while a forward is running. That copy is not small: at `resident` 32
+        it is 201 MB read and 100 MB written per call.
+
+        The cast stays a graph node off the fp32 masters, so an expert's
+        gradient still lands on the master exactly as before, and the saved
+        per-row copies that the backward used to walk are gone with it.
+        Measured on one RTX 4070 at chunk 4096, context 4096, batch 1:
+        3321 -> 3626 char/s, with gradient norms unchanged (3.29e-3 vs
+        3.27e-3).
+
+        It MUST be dropped at the start of every forward - see drop_mirror -
+        because after backward the graph it belongs to has been freed.
+        """
+        m = getattr(self, "_mirror", None)
+        if m is None:
+            from .precision import compute_dtype
+            m = tuple(w.to(compute_dtype())
+                      for w in (self.w1, self.w3, self.w2))
+            self._mirror = m
+        return [m]
+
+    def drop_mirror(self):
+        """
+        Forget the per-forward operand. See `stacked`.
+
+        `PooledMLP` is safe to call on a pool that never builds one: the
+        resident pool has no mirror to drop, and `invalidate` below stays a
+        no-op for the same reason.
+        """
+        self._mirror = None
 
     def invalidate(self):
         pass
@@ -564,7 +639,6 @@ class PagedPool(nn.Module):
         # an expert that has earned a gate is worth keeping resident over one
         # that has not, when demand is otherwise equal
         return want + 0.05 * self.gate.detach().abs()
-
     @torch.no_grad()
     def choose_by_demand(self, want):
         """
@@ -624,6 +698,46 @@ class PagedPool(nn.Module):
         if never and evictable:
             weakest = min(evictable, key=lambda e: float(score[e]))
             plan[plan.index(weakest)] = never[0]
+
+        # The starvation hatch. Every expert gets one turn from the sweep
+        # above, which is finite by design - but on this run the demand scores
+        # are near-tied, so after that turn an expert that has been admitted
+        # can never clear the margin and never comes back. Measured: the best
+        # non-resident candidate sits at 0.97-1.03x the weakest resident while
+        # the ordinary path demands 1.10x, and 97% of the starved cohort never
+        # gets a slot on its own. This is a bounded route back in.
+        #
+        # The population filter does the targeting; the budget does the
+        # pacing. There is deliberately NO score-proximity floor: being far
+        # below the weakest resident is what starvation *looks like*, so
+        # requiring closeness would exclude exactly the experts this is for.
+        if (self.hatch_every and evictable
+                and self.segments % self.hatch_every == 0):
+            held = set(plan)
+            # derived from current telemetry, never a stored constant: the
+            # starved cohort's admission ceiling ran 35 -> 92 over 33M
+            # characters, so any fixed cutoff is stale within minutes
+            cut = float(self.admits[:self._n].median())
+            opened = [e for e in cands if e not in held
+                      and (float(self.born[e]) > 0
+                           or float(self.admits[e]) <= cut)
+                      and self.segments - float(self.since[e])
+                      >= self.hatch_cooldown]
+            if opened:
+                pick = min(opened, key=lambda e: (float(self.admits[e]),
+                                                  float(self.last_seen[e])))
+                victim = min(evictable, key=lambda e: float(score[e]))
+                plan[plan.index(victim)] = pick
+                self.hatch_log.append({
+                    "step": int(self.now), "segments": int(self.segments),
+                    "candidate": int(self.uid[pick]),
+                    "cand_admits": float(self.admits[pick]),
+                    "cand_last_seen": float(self.last_seen[pick]),
+                    "cand_want": round(float(score[pick]), 6),
+                    "resident": int(self.uid[victim]),
+                    "resident_want": round(float(score[victim]), 6),
+                    "eligible": len(opened), "cut": round(cut, 1)})
+                del self.hatch_log[:-64]
         return plan[:k]
 
     @torch.no_grad()
@@ -723,7 +837,6 @@ class PagedPool(nn.Module):
         belong to the expert and not to the slot it occupied.
         """
         st = (self._opt.state if self._opt is not None else {})
-        dev = self.w1.device
         tensors = ((self.w1, "w1"), (self.w3, "w3"), (self.w2, "w2"))
         old = list(self.slots)
 
@@ -734,28 +847,34 @@ class PagedPool(nn.Module):
                     # its weights are final for this stay, so this is the
                     # moment its description is most accurate
                     self.keys[e] = self._key_of(self.w1.data[s].float())
-                ent = {nm: p.data[s].detach().to("cpu").clone()
-                       for p, nm in tensors}
+                # .to("cpu") already allocates fresh host memory for a
+                # device->host copy, so the clone that used to be here was a
+                # second full-expert memcpy on every park: ~37.75 MB per
+                # expert, ~1.2 GB per checkpoint across the working set.
+                ent = {nm: p.data[s].detach().to("cpu") for p, nm in tensors}
                 for p, nm in tensors:
                     o = st.get(p)
                     if o and "exp_avg" in o:
-                        ent[nm + "_m"] = o["exp_avg"][s].to("cpu").clone()
-                        ent[nm + "_v"] = o["exp_avg_sq"][s].to("cpu").clone()
+                        ent[nm + "_m"] = o["exp_avg"][s].to("cpu")
+                        ent[nm + "_v"] = o["exp_avg_sq"][s].to("cpu")
                 self.tiers.put(self._f(e), ent, dirty=True)
 
         for s, e in enumerate(plan):
             if e < 0 or old[s] == e:
                 continue
             src = self.tiers.fetch(self._f(e))
-            src = {k: (v.to(dev) if torch.is_tensor(v) else v)
-                   for k, v in src.items()}
+            # Copy STRAIGHT INTO THE SLOT. Landing the expert in a fresh
+            # device tensor first and then assigning it into the slot moved
+            # every arriving expert across the bus twice - once host->device
+            # and once device->device - and allocated a full expert of VRAM
+            # per admission to hold the intermediate.
             for p, nm in tensors:
-                p.data[s] = src[nm]
+                p.data[s].copy_(src[nm])
                 o = st.get(p)
                 if o and "exp_avg" in o:
                     if nm + "_m" in src:
-                        o["exp_avg"][s] = src[nm + "_m"]
-                        o["exp_avg_sq"][s] = src[nm + "_v"]
+                        o["exp_avg"][s].copy_(src[nm + "_m"])
+                        o["exp_avg_sq"][s].copy_(src[nm + "_v"])
                     else:
                         o["exp_avg"][s].zero_()
                         o["exp_avg_sq"][s].zero_()

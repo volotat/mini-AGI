@@ -15,9 +15,11 @@ left alone, because a model that reads a JPEG learns what a JPEG header looks
 like and nothing else useful.
 """
 
+import codecs
 import hashlib
 import json
 import os
+import re
 
 import numpy as np
 
@@ -42,9 +44,16 @@ def looks_like_text(path, probe=4096):
         return False
     if b"\x00" in head:
         return False
+    # Decode the sample as a STREAM, so a multi-byte character cut in half by
+    # the end of the probe is held rather than raised on. The probe ends on an
+    # arbitrary byte, so it lands inside a UTF-8 sequence whenever the text
+    # happens to put one there - and calling the file binary for that drops
+    # ordinary text from the corpus.
     try:
-        s = head.decode("utf-8")
+        s = codecs.getincrementaldecoder("utf-8")().decode(head)
     except UnicodeDecodeError:
+        return False
+    if not s:
         return False
     printable = sum(1 for c in s if c.isprintable() or c in "\n\r\t")
     return printable / len(s) > 0.9
@@ -124,6 +133,25 @@ def collect(paths, follow_symlinks=False, cache="runs/corpus_index.json"):
 
 _TOK = None
 
+# `surrogateescape` gives a byte that is not valid UTF-8 a lone surrogate of
+# its own, and re-encoding a surrogate with the tokenizer's strict codec
+# raises. A file is a byte sequence, and reading one may not fail on the bytes
+# it happens to contain, so those runs are spliced back as the bytes they came
+# from while everything around them goes through the tokenizer - which is what
+# keeps the structural markers single ids.
+_LONE = re.compile("[\udc80-\udcff]+")
+
+
+def _ids(text):
+    """`text` as token ids: total over every byte sequence it could hold."""
+    out, pos = [], 0
+    for m in _LONE.finditer(text):
+        out.extend(_TOK.encode(text[pos:m.start()]).ids)
+        out.extend(text[m.start():m.end()].encode("utf-8", "surrogateescape"))
+        pos = m.end()
+    out.extend(_TOK.encode(text[pos:]).ids)
+    return out
+
 
 def as_stream(path):
     """
@@ -142,8 +170,8 @@ def as_stream(path):
         _TOK = ByteTokenizer()
     with open(path, "rb") as f:
         raw = f.read()
-    text = raw.decode("utf-8", "surrogateescape")
-    return np.asarray(_TOK.encode(text).ids, dtype=np.uint16)
+    return np.asarray(_ids(raw.decode("utf-8", "surrogateescape")),
+                      dtype=np.uint16)
 
 
 def summarise(files):

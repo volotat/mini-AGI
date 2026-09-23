@@ -297,7 +297,8 @@ class PooledMLP(nn.Module):
     """Routes into the shared pool. Nothing here names a domain."""
 
     def __init__(self, pool, d_model, top_k=4, site=0, z_weight=1e-3,
-                 grad_checkpoint=True, capacity_factor=1.5):
+                 grad_checkpoint=True, capacity_factor=1.5,
+                 aux_mode="switch"):
         super().__init__()
         self._pool = [pool]
         self.top_k, self.site, self.z_weight = top_k, site, z_weight
@@ -333,6 +334,11 @@ class PooledMLP(nn.Module):
         # the padded rectangle scales with the worst imbalance rather than with
         # the work - see the dispatch below.
         self.capacity_factor = float(capacity_factor or 0.0)
+        # Which histogram the load-balancing term is built from. "switch"
+        # counts every assignment the dispatch will make; "top1" counts only
+        # each character's best expert, which is what this did until the drop
+        # rate was measured - see the aux below.
+        self.aux_mode = str(aux_mode or "switch")
         self.dropped = 0
         # ...and the denominator, so the counter reads as a share of the
         # work rather than as a number nobody can scale.
@@ -407,7 +413,15 @@ class PooledMLP(nn.Module):
                 # keep the call site with its states: each one has its own
                 # router, so a state is only meaningful beside the router
                 # that read it
-                p._h_keep.append((self, (flat[::step_]).detach()))
+                #
+                # CLONED, because a strided slice is a VIEW and holds the
+                # whole chunk's activations alive. These are meant to be
+                # about a hundred kilobytes of sampled states each; as views
+                # they pinned the full [T, d_model] fp32 buffer per entry,
+                # and with up to 64 entries that is most of a gigabyte of
+                # VRAM held from the forward until the next chunk's demand
+                # reads them.
+                p._h_keep.append((self, flat[::step_].detach().clone()))
 
         if _ROUTES is not None:
             # which EXPERTS this call-site invocation picked, in the order the
@@ -431,8 +445,30 @@ class PooledMLP(nn.Module):
             # pressure, and it is visible without waiting for a plateau.
             p.pressure = 0.9 * float(p.pressure) + 0.1 * (1.0 - kept)
             p.want_k = 0.9 * float(p.want_k) + 0.1 * float(want)
-        frac = F.one_hot(idx[:, 0], n).float().mean(0)
-        self.aux = ((frac * probs.mean(0)).sum() * n
+        # THE LOAD THAT MATTERS IS EVERY ASSIGNMENT, not the first one. This
+        # term used to be built from `idx[:, 0]` - each character's single best
+        # expert - while the dispatch fills its slot buffers from all `top_k`
+        # of them, and it is those buffers that the capacity bound truncates.
+        # At top_k 8, seven of every eight choices were invisible here, so the
+        # term was balancing a histogram that nothing was measured against.
+        # The pool reported 33-39% of assignments dropped on real text at the
+        # shipped capacity_factor, which is what a balance term reading the
+        # wrong histogram looks like: `AutoGrow` below asserts that this loss
+        # "forces routing toward uniform on purpose", and it was not.
+        #
+        # `hit` is the assignment histogram, already computed above for the
+        # usage counters, so the fix costs nothing. The form is Switch's,
+        # n * sum_i(f_i * P_i), with f the share of assignments an expert took
+        # and P its mean gate probability. At a uniform router f_i = P_i = 1/n
+        # and the product is 1.0, which is the anchor `pool_aux` is calibrated
+        # against - so this changes what is measured without changing the
+        # scale of the penalty. `aux_mode: top1` restores the old behaviour
+        # exactly, for anyone comparing against the published run.
+        if self.aux_mode == "top1":
+            f = F.one_hot(idx[:, 0], n).float().mean(0)
+        else:
+            f = hit / hit.sum().clamp_min(1)
+        self.aux = ((f * probs.mean(0)).sum() * n
                     + self.z_weight * torch.logsumexp(logits, -1).pow(2).mean())
 
         # capacity-based batched dispatch (Switch-Transformer style): every

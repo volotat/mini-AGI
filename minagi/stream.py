@@ -46,11 +46,19 @@ def detach_caches(caches):
 
 
 def trim_caches(caches, keep):
-    """Drop the oldest positions once the cache is longer than the context."""
+    """
+    Drop the oldest positions once the cache is longer than the context.
+
+    A slice, not a copy. The cache is only ever read back through the
+    attention's concatenation, which materialises a fresh contiguous tensor
+    anyway, so copying here would double the bytes moved for every generated
+    character - and in steady state this runs once per character with the cache
+    at the full context, where that copy is the larger half of the cost.
+    """
     for c in caches:
         if c["k"] is not None and c["k"].shape[-2] > keep:
-            c["k"] = c["k"][..., -keep:, :].contiguous()
-            c["v"] = c["v"][..., -keep:, :].contiguous()
+            c["k"] = c["k"][..., -keep:, :]
+            c["v"] = c["v"][..., -keep:, :]
     return caches
 
 

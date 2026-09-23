@@ -72,6 +72,23 @@ def expert_leaf(key):
     return tail[0]
 
 
+def _recorded_val(path):
+    """
+    The val already in the manifest, for a save that did not measure one.
+
+    `train.py` checkpoints on a timer, where there is no validation number to
+    pass, and writing that None over the last measured one leaves the manifest
+    claiming the directory holds no score at all. `best_val` then returns inf
+    and a run that diverges has nothing to fall back to. A save that does not
+    know the value keeps the one already recorded.
+    """
+    try:
+        with open(os.path.join(path, "manifest.json")) as f:
+            return json.load(f).get("val")
+    except (OSError, ValueError):
+        return None
+
+
 def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
          extra=None):
     """Write the whole model out: bundles for the resident parts, one file per expert."""
@@ -134,6 +151,8 @@ def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
     d_ff = d_model = None
     for i in sorted(by_expert)[:1]:
         d_ff, d_model = by_expert[i]["w1"].shape
+    if val is None:
+        val = _recorded_val(path)
     manifest = {
         "step": step, "val": val, "cfg": cfg,
         "n_experts": len(entries), "d_model": d_model, "d_ff": d_ff,
@@ -239,6 +258,8 @@ def _save_paged(model, pool, path, step, val, opt, cfg, verbose, extra=None):
         d["pool_since"] = tel["since"]
     else:
         manifest_tel = None
+    if val is None:
+        val = _recorded_val(path)
     manifest = {"step": step, "val": val, "cfg": d,
                 "telemetry": manifest_tel,
                 # The pool's own count, NOT len(entries). The router
@@ -395,8 +416,19 @@ def _load_expert_moments(opt, model, path):
 def summarise(path):
     with open(os.path.join(path, "manifest.json")) as f:
         man = json.load(f)
-    ne = len([f for f in os.listdir(os.path.join(path, EXPERTS))
-              if f.endswith((".npy", ".npz"))])
+    ed = os.path.join(path, EXPERTS)
+    names = os.listdir(ed)
+    # A write that died between its temp file and the rename leaves a
+    # `*.tmp.npz` behind, and counting it inflates the expert count by a file
+    # that is not an expert. Saying so is the point: the count below is what
+    # the directory is taken to hold, and a silent extra file is a save that
+    # did not finish.
+    stale = sorted(f for f in names if f.endswith(".tmp.npz"))
+    if stale:
+        print(f"  WARNING: {len(stale)} unfinished expert write(s) on disk "
+              f"({', '.join(stale[:3])}{'...' if len(stale) > 3 else ''})")
+    ne = len([f for f in names
+              if f.endswith((".npy", ".npz")) and not f.endswith(".tmp.npz")])
     tot = 0
     for root, _, files in os.walk(path):
         for f in files:

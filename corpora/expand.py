@@ -21,6 +21,7 @@ would be one long window with no boundaries in it.
 
 import argparse
 import os
+import re
 import shutil
 import sys
 
@@ -46,6 +47,7 @@ SOURCES = [
     ("code", "data_char", ".py"),
     ("arithmetic", "data_math_char", ".txt"),
     ("chat", "data_chat_char", ".txt"),
+    ("self-knowledge", "data_self_char", ".txt"),
     ("chess", "data_chess_char", ".txt"),
 ]
 
@@ -85,6 +87,20 @@ def write_shards(raw, out_dir, stem, ext, shard_chars, limit=None):
     return written, chars
 
 
+def stale_shards(out_dir, stem, ext):
+    """
+    The shards a previous run of this same corpus left in `out_dir`.
+
+    Only the names this expand writes - `<stem>-<n><ext>` - are candidates.
+    A lane directory can also hold another source's files: `data/val/` is
+    where `fetch` keeps the records it held back for a different corpus, and
+    removing everything with the lane's extension deletes data this command
+    never wrote.
+    """
+    pat = re.compile(re.escape(stem) + r"-\d+" + re.escape(ext))
+    return [f for f in os.listdir(out_dir) if pat.fullmatch(f)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="data")
@@ -95,10 +111,10 @@ def main():
     ap.add_argument("--clean", action="store_true",
                     help="remove the output directory first")
     ap.add_argument("--only", action="append", default=[],
-                    help="rebuild just these corpora; repeatable. The lane is "
-                         "emptied first, because shard counts change and a "
-                         "shorter rebuild would leave the tail of the old one "
-                         "behind, mixing two formats in one subject.")
+                    help="rebuild just these corpora; repeatable. This lane's "
+                         "own shards are removed first, because shard counts "
+                         "change and a shorter rebuild would leave the tail "
+                         "of the old one behind.")
     a = ap.parse_args()
 
     from minagi.tokenizer import ByteTokenizer
@@ -123,9 +139,8 @@ def main():
             raw = decode(np.asarray(arr[:cap] if cap else arr), tok)
             out_dir = os.path.join(a.out, split, name)
             if a.only and os.path.isdir(out_dir):
-                for f in os.listdir(out_dir):
-                    if f.endswith(ext):
-                        os.remove(os.path.join(out_dir, f))
+                for f in stale_shards(out_dir, name, ext):
+                    os.remove(os.path.join(out_dir, f))
             n, chars = write_shards(raw, out_dir, name, ext, a.shard_chars)
             total[(split, name)] = (n, chars)
             print(f"  {split}/{name:<11} {n:>5} files  {chars/1e6:>7.1f}M chars",

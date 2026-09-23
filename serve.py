@@ -23,6 +23,7 @@ Binds to localhost.
 """
 
 import argparse
+import codecs
 import json
 import os
 import sys
@@ -232,6 +233,28 @@ def build_prompt(messages, budget, prime=""):
     return prompt[-budget:] if len(prompt) > budget else prompt
 
 
+def gen_decoder():
+    """A UTF-8 decoder that can be fed one byte id at a time."""
+    return codecs.getincrementaldecoder("utf-8")("replace")
+
+
+def gen_piece(tok, id, dec):
+    """
+    The text for one generated id, with multi-byte characters left whole.
+
+    The reply is generated a byte at a time, but a character in it can be two
+    to four bytes, and decoding each id on its own turns one character into
+    that many replacement characters. The mangled text is not only shown: the
+    finished reply is fed back to the learner, so the model would be trained on
+    it. A partial sequence therefore waits in the decoder for the bytes that
+    finish it. A structural marker (id >= 256) is not bytes at all, so it is
+    emitted as itself, flushing any pending bytes the way `decode` does.
+    """
+    if id >= 256:
+        return dec.decode(b"", final=True) + tok.decode([id])
+    return dec.decode(bytes([id]), final=False)
+
+
 @torch.no_grad()
 def stream(prompt, max_new):
     from minagi.config import get as _g, load as _lc
@@ -290,6 +313,7 @@ def stream(prompt, max_new):
 
     cur = out[:, -1:]
     produced = []
+    dec = gen_decoder()
     # The prompt has already chosen the working set above. Report it, so the
     # page starts the reply showing what is actually answering it.
     yield {"swap": {"at": 0, "moved": None, "pool": resident_experts()}}
@@ -315,7 +339,12 @@ def stream(prompt, max_new):
         text = tok.decode(produced)
         if text.endswith(B1):
             break
-        yield {"t": tok.decode([produced[-1]])}
+        # Nothing comes out until a character is complete, so a multi-byte
+        # one is one event rather than one per byte. ASCII - nearly all of it
+        # - is unchanged and still streams a character at a time.
+        piece = gen_piece(tok, produced[-1], dec)
+        if piece:
+            yield {"t": piece}
 
 
 def remember(user_text, bot_text):

@@ -36,6 +36,11 @@ class RecurConfig(Config):
     # the largest share of a batch one expert may take, as a
     # multiple of its fair share; overflow is dropped. 0 = no bound
     pool_capacity_factor: float = 1.5
+    # Which histogram the load-balancing aux is built from: "switch" counts
+    # every assignment the dispatch makes, "top1" only each character's best
+    # expert. Like capacity_factor this is a run-time setting, not a property
+    # of the weights, so config.yaml wins over the checkpoint.
+    pool_aux_mode: str = "switch"
     pool_max: int = 1024
     pool_aux: float = 0.01
     n_prelude: int = 1        # blocks before the loop
@@ -76,7 +81,8 @@ class RecurCoder(nn.Module):
                 blk.mlp = PooledMLP(
                     self.pool, cfg.d_model, cfg.pool_top_k, site,
                     capacity_factor=getattr(
-                        cfg, 'pool_capacity_factor', 1.5))
+                        cfg, 'pool_capacity_factor', 1.5),
+                    aux_mode=getattr(cfg, 'pool_aux_mode', "switch"))
                 site += 1
         # merges the running latent state with the original embedded input, so
         # the loop cannot drift away from what it is actually reading
@@ -236,6 +242,16 @@ class RecurCoder(nn.Module):
                 collect=False):
         cfg = self.cfg
         B, T = idx.shape
+        # ONE OPERAND PER FORWARD. The pool caches the bf16 cast of its expert
+        # weights for the duration of a forward, because re-casting it for
+        # every one of the up-to-24 rows is 41 copies of the whole stack for a
+        # value that cannot move mid-forward. It has to be released here so
+        # the next forward builds a graph node of its own - see
+        # PagedPool.stacked and drop_mirror. A resident pool has no mirror and
+        # the attribute check is what keeps this call site generic.
+        pool_ = getattr(self, "pool", None)
+        if pool_ is not None and hasattr(pool_, "drop_mirror"):
+            pool_.drop_mirror()
         x = self.tok_emb(idx)
         if pos_offset + T > self.rope_cos.shape[0]:
             # Reading past the rotary tables gives an empty slice and a
@@ -316,6 +332,23 @@ class RecurCoder(nn.Module):
                         newly.squeeze(-1),
                         torch.full_like(steps_used, float(n + 1)), steps_used)
                 halted = halted | newly
+                if not collect and bool(halted.all()):
+                    # EVERY TOKEN HAS CHOSEN ITS ROW, so the remaining rows
+                    # cannot change the answer: `newly` is what selects a
+                    # row's logits and it is gated on `~halted`, so with
+                    # nothing left unhalted every later row is a no-op on
+                    # `halted_logits` and on `steps_used`. Breaking here is
+                    # therefore exact, not an approximation.
+                    #
+                    # The loop ceiling is not the depth the model wants. The
+                    # trace this project draws runs 4 to 14 rows against a
+                    # ceiling of 24 while reading, and writing costs a little
+                    # more - so a character was paying for 24 rows to use ten.
+                    #
+                    # `collect` is excluded: the per-step trace is a
+                    # diagnostic and it wants every row, including the ones
+                    # after halting that it draws in grey.
+                    break
             if collect:
                 per_step.append({"step": n + 1,
                                  "halt_p": float(p_n.mean()),

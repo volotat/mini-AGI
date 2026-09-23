@@ -164,8 +164,13 @@ class LiveLearner:
         keep = {k: self.manifest[k] for k in ("read_chars", "context_now")
                 if k in self.manifest}
         keep.update(extra or {})
+        # A step is CUMULATIVE over the model's whole life, the way train.py
+        # counts it, and this process only ever took the newest ones. Writing
+        # `self.steps` alone would restart the counter at zero, and an expert's
+        # age is `step - born`, so the next train.py resume would read a step
+        # younger than the experts and exempt them all from pruning.
         weights_store.save(self.model, self.weights_dir, opt=self.opt,
-                           step=self.manifest.get("step"),
+                           step=(self.manifest.get("step") or 0) + self.steps,
                            val=self.manifest.get("val"),
                            cfg=cfg, extra=keep)
         self.unsaved = 0
