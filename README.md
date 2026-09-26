@@ -361,7 +361,7 @@ It is the same path training uses: same chunking, same cache, same gradient step
 | `--lr` | default 5e-5, below a training run: reading should adjust the model, not overwrite it |
 | `--mix ""` | skip the before/after scoring |
 
-Two defaults worth knowing. **Nothing is saved without `--save`**, so a read is a dry run until you decide otherwise. And it scores the held-out mixture before and after, then says plainly if reading your files cost the model ground elsewhere - the forgetting question measured per-read rather than assumed away.
+Two defaults worth knowing. **Nothing is saved without `--save`**, so a read is a dry run until you decide otherwise. Dry reads send changed expert files to a temporary overlay, so eviction cannot write part of the in-memory update back to the real model. And it scores the held-out mixture before and after, then says plainly if reading your files cost the model ground elsewhere - the forgetting question measured per-read rather than assumed away.
 
 ## Benchmarks
 

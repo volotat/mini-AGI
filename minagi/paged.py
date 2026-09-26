@@ -61,8 +61,9 @@ class Tiers:
     """
 
     def __init__(self, path, d_model, d_ff, ram_capacity=256, device="cpu",
-                 read_only=False):
+                 read_only=False, write_path=None):
         self.path = path
+        self.write_path = write_path or path
         self.d_model, self.d_ff = d_model, d_ff
         self.ram = OrderedDict()             # id -> dict of CPU tensors
         self.ram_capacity = ram_capacity
@@ -77,7 +78,25 @@ class Tiers:
         self.reads = self.hits = self.evictions = self.writebacks = 0
 
     def _file(self, i):
-        return os.path.join(self.path, "e%05d.npz" % i)
+        name = "e%05d.npz" % i
+        if self.write_path != self.path:
+            changed = os.path.join(self.write_path, name)
+            if os.path.exists(changed):
+                return changed
+        return os.path.join(self.path, name)
+
+    def _write_file(self, i):
+        return os.path.join(self.write_path, "e%05d.npz" % i)
+
+    def delete(self, i):
+        """Delete an expert only from the writable layer."""
+        if self.read_only:
+            raise RuntimeError("read-only pool tried to delete e%05d.npz" % i)
+        f = self._write_file(i)
+        if os.path.exists(f):
+            os.remove(f)
+        self.ram.pop(i, None)
+        self.dirty.discard(i)
 
     def _from_disk(self, i):
         """
@@ -139,9 +158,11 @@ class Tiers:
         # measurement for both.
         arrays = {k: (pack_bf16(v) if is_moment(k) else v.to(torch.float32).numpy())
                   for k, v in ent.items() if torch.is_tensor(v)}
-        tmp = self._file(i) + ".tmp.npz"
+        os.makedirs(self.write_path, exist_ok=True)
+        target = self._write_file(i)
+        tmp = target + ".tmp.npz"
         np.savez(tmp, **arrays)
-        os.replace(tmp, self._file(i))
+        os.replace(tmp, target)
         self.writebacks += 1
 
     def flush(self):
@@ -175,7 +196,7 @@ class PagedPool(nn.Module):
 
     def __init__(self, path, d_model, d_ff, n_experts, resident=16,
                  ram_capacity=256, device="cpu", max_experts=1_000_000,
-                 read_only=False):
+                 read_only=False, write_path=None):
         super().__init__()
         self.path = path
         self.d_model, self.d_ff = d_model, d_ff
@@ -184,7 +205,7 @@ class PagedPool(nn.Module):
         self._n = n_experts
         self.read_only = read_only
         self.tiers = Tiers(path, d_model, d_ff, ram_capacity, device,
-                           read_only=read_only)
+                           read_only=read_only, write_path=write_path)
 
         # the VRAM slots - fixed in number, their contents swapped
         self.w1 = nn.Parameter(torch.zeros(self.resident, d_ff, d_model))
@@ -1053,11 +1074,7 @@ class PagedPool(nn.Module):
         for i in range(self._n):
             if i not in kept:
                 u = self._f(i)
-                f = self.tiers._file(u)
-                if os.path.exists(f):
-                    os.remove(f)
-                self.tiers.ram.pop(u, None)
-                self.tiers.dirty.discard(u)
+                self.tiers.delete(u)
 
         idx = torch.tensor(keep, dtype=torch.long, device=self.gate.device)
         opt = getattr(self, "_opt", None)
