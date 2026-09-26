@@ -317,9 +317,11 @@ SELF_FROM_CODE = [
     (["thanks", "thank you"], "You're welcome."),
 ]
 
-SELF = _load_self_knowledge() or SELF_FROM_CODE
+YAML_SELF = _load_self_knowledge()
+SELF = YAML_SELF or SELF_FROM_CODE
 
 SEED = [(q, a.format(**_F)) for qs, a in SELF for q in qs]
+SELF_SEED = [(q, a.format(**_F)) for qs, a in YAML_SELF for q in qs]
 
 
 def clean_doc(doc):
@@ -407,8 +409,8 @@ def render_math_turn(rng):
     return f"{U0}\n{q}\n{U1}\n{B0}\n{ans.strip()}\n{B1}\n"
 
 
-def render_seed_turn(rng):
-    q, a = rng.choice(SEED)
+def render_seed_turn(rng, seed=None):
+    q, a = rng.choice(SEED if seed is None else seed)
     if rng.random() < 0.5:
         q = q.capitalize() + ("?" if q.split()[0] in
                               ("who", "what", "can", "do", "are", "how",
@@ -436,36 +438,56 @@ def build_conversation(pairs, rng, max_turns=4):
     return "".join(out) + "\n"
 
 
+def build_self_conversation(rng, max_turns=4):
+    """Stack only the model-description turns loaded from YAML."""
+    return "".join(render_seed_turn(rng, SELF_SEED)
+                   for _ in range(rng.randint(1, max_turns))) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    # data_chat_char, because that is the name `corpora expand` looks for.
-    # It was data_chat, so even a run that got past the tokenizer wrote where
-    # nothing would read it.
-    ap.add_argument("--out", default="data_chat_char")
+    ap.add_argument("--out", default=None)
     ap.add_argument("--conversations", type=int, default=400000)
     ap.add_argument("--val", type=int, default=4000)
     ap.add_argument("--max-pairs", type=int, default=200000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--self-only", action="store_true",
+                    help="generate only YAML-backed model-description turns")
     args = ap.parse_args()
+    args.out = args.out or ("data_self_knowledge_char" if args.self_only
+                            else "data_chat_char")
 
     os.makedirs(args.out, exist_ok=True)
-    print("harvesting docstring/implementation pairs from local Python ...")
-    t0 = time.time()
-    pairs = harvest(max_pairs=args.max_pairs)
-    print(f"  {len(pairs):,} pairs in {time.time()-t0:.1f}s")
-    if not pairs:
-        print("no pairs harvested", file=sys.stderr)
-        return 1
-    print("\nexamples:")
-    for p in pairs[:3]:
-        print(f"  {p['name']}: {p['doc'][:70]}")
+    rng = random.Random(args.seed)
+    if args.self_only:
+        if not SELF_SEED:
+            print("self_knowledge.yaml has no usable question/answer pairs",
+                  file=sys.stderr)
+            return 1
+        pairs = []
+        def make_conversation():
+            return build_self_conversation(rng)
+        print(f"generating from {len(SELF_SEED):,} self-knowledge "
+              f"question/answer pairs")
+    else:
+        print("harvesting docstring/implementation pairs from local Python ...")
+        t0 = time.time()
+        pairs = harvest(max_pairs=args.max_pairs)
+        print(f"  {len(pairs):,} pairs in {time.time()-t0:.1f}s")
+        if not pairs:
+            print("no pairs harvested", file=sys.stderr)
+            return 1
+        print("\nexamples:")
+        for p in pairs[:3]:
+            print(f"  {p['name']}: {p['doc'][:70]}")
+        def make_conversation():
+            return build_conversation(pairs, rng)
 
     from minagi.tokenizer import ByteTokenizer
     tok = ByteTokenizer()
 
-    rng = random.Random(args.seed)
     print("\nsample conversation:")
-    print(textwrap.indent(build_conversation(pairs, rng)[:600], "  "))
+    print(textwrap.indent(make_conversation()[:600], "  "))
 
     for split, count in (("train", args.conversations), ("val", args.val)):
         path = os.path.join(args.out, f"{split}.bin")
@@ -473,7 +495,7 @@ def main():
         with open(path, "wb") as f:
             batch = []
             for i in range(count):
-                batch.append(build_conversation(pairs, rng))
+                batch.append(make_conversation())
                 if len(batch) >= 2048:
                     for enc in tok.encode_batch(batch):
                         a = np.array(enc.ids, dtype=np.uint16)
@@ -494,11 +516,14 @@ def main():
         else:
             va = total
 
-    json.dump({"vocab_size": tok.get_vocab_size(), "train_tokens": tr,
-               "val_tokens": va, "pairs": len(pairs),
-               "tokenizer": "byte",
-               "format": f"{U0}...{U1}{B0}...{B1}"},
-              open(os.path.join(args.out, "meta.json"), "w"), indent=2)
+    meta = {"vocab_size": tok.get_vocab_size(), "train_tokens": tr,
+            "val_tokens": va,
+            "pairs": len(SELF_SEED) if args.self_only else len(pairs),
+            "self_only": args.self_only,
+            "tokenizer": "byte",
+            "format": f"{U0}...{U1}{B0}...{B1}"}
+    with open(os.path.join(args.out, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
     print(f"wrote {args.out}/meta.json")
     return 0
 
