@@ -676,6 +676,7 @@ class AutoGrow:
         # how far past its trial an expert still counts as "recent"
         self.recent_mult = recent_mult
         self.keep_ratio = 1.0
+        self.selfdir_veto = False
         self.log = []
 
     def _in_flight(self, pool, model_step):
@@ -758,6 +759,16 @@ class AutoGrow:
                 and (not self.max_disk_gb or want <= self.max_disk_gb))
         used = idle_frac <= self.dying_frac_max
         kept = self.keep_ratio >= self.keep_ratio_min
+
+        if self.selfdir_veto:
+            self.selfdir_veto = False
+            rec = {"step": model_step, "val": round(float(val_loss), 4),
+                   "experts": n, "idle": s["idle"], "mem": round(mem_frac, 3),
+                   "in_flight": in_flight, "disk_gb": 0.0,
+                   "keep_ratio": round(self.keep_ratio, 3), "grew": 0,
+                   "reason": "self-directed veto (model voted grow 0)"}
+            self.log.append(rec)
+            return rec
 
         rec = {"step": model_step, "val": round(float(val_loss), 4),
                "experts": n, "idle": s["idle"], "mem": round(mem_frac, 3),

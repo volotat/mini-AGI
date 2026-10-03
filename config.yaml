@@ -195,3 +195,25 @@ plots:
   enabled: true           # redraw the graphs whenever the sample log grows
   last: 100               # millions of characters the recent-progress graph
                           # covers, counted back from wherever reading has got
+
+interop:
+  # Tool-call loop (serve.py). The model may emit <tool>...</tool> blocks and
+  # the harness executes them against the registry (Ma'at gates + HTTP tools).
+  max_tool_calls: 4        # tool calls allowed per reply, to prevent loops
+  http_timeout: 10.0       # not yet wired (HTTP tool deferred)
+  tools: tools.yaml        # not yet wired (HTTP tool deferred)
+
+selfdir:
+  # Self-directed learning (train.py). Off by default. When --selfdir is
+  # passed, the model reads its own <self> telemetry at the growth cadence and
+  # may emit a <policy> directive (lr xN.NN clamped to [0.5, 2.0], grow 0|1).
+  enabled: false
+  max_new: 64             # characters the model may write to state a directive
+
+receipts:
+  path: runs/receipts.jsonl   # append-only, tamper-evident record of agent actions
+
+health:
+  # Discrete complete-monotonicity certificate over the recent held-out loss
+  # trajectory (reuses the verified cos-obstruction from the RH work).
+  window: 32                  # how many recent evaluations the certificate covers

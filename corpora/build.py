@@ -30,7 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # name -> (where it lands, what makes it)
 # Sampled sizes first, then what --full uses instead (0 meaning everything).
 LANES = ["wikipedia", "stories", "chat", "reasoning",
-         "arithmetic", "code", "chess", "self-knowledge"]
+         "arithmetic", "code", "chess", "self-knowledge", "tool_use",
+         "self_direction"]
 
 SAMPLED = {"wikipedia": 120_000, "stories": 400_000,
            "chat": 200_000, "reasoning": 20_000}
@@ -118,6 +119,14 @@ def build_self_knowledge(_):
     return _generated("chat", "chat")
 
 
+def build_tool_use(_):
+    return _generated("tool_use", "tool_use")
+
+
+def build_self_direction(_):
+    return _generated("self_direction", "self_direction")
+
+
 BUILDERS = {
     "wikipedia":      (build_wikipedia,      "data/train/wikipedia"),
     "stories":        (build_stories,        "data/train/stories"),
@@ -127,6 +136,8 @@ BUILDERS = {
     "code":           (build_code,           "data/train/code"),
     "chess":          (build_chess,          "data/train/chess"),
     "self-knowledge": (build_self_knowledge, "data/train/self-knowledge"),
+    "tool_use":       (build_tool_use,       "data/train/tool_use"),
+    "self_direction": (build_self_direction, "data/train/self_direction"),
 }
 
 

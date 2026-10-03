@@ -49,6 +49,21 @@ STATE = {"model": None, "tok": None, "weights": None, "learner": None}
 
 U0, U1, B0, B1 = "<user>", "</user>", "<bot>", "</bot>"
 
+from minagi import tools as tools_mod
+from minagi import maat as maat_mod
+
+REGISTRY = tools_mod.ToolRegistry()
+maat_mod.register_maat_tools(REGISTRY)
+
+from minagi import ledger as ledger_mod
+from minagi import http_tool as http_tool_mod
+
+os.makedirs("runs", exist_ok=True)
+RECEIPTS = ledger_mod.ReceiptLedger(os.path.join("runs", "receipts.jsonl"))
+
+TOOLS_ON = True
+MAX_TOOL_CALLS = 4
+
 # A passage of the corpus the conversation opens with. Empty when priming is
 # off or no corpus is on disk.
 PRIME = ""
@@ -235,6 +250,37 @@ def build_prompt(messages, budget, prime=""):
     return prompt[-budget:] if len(prompt) > budget else prompt
 
 
+def where(caches):
+    """
+    The position the next character sits at: however much history the
+    cache still holds after trimming.
+
+    NOT a running count. Rotary tables are built for positions 0 to
+    block-1, so a counter that saturates at `block` asks for position
+    `block` on the very next character and the model refuses. Reading it
+    back off the cache cannot drift, because the cache is the thing the
+    positions have to agree with.
+    """
+    for c in caches:
+        if c.get("k") is not None:
+            return c["k"].shape[-2]
+    return 0
+
+
+def _prefill_text(out, caches, tok, text, model):
+    from minagi.stream import trim_caches
+    ids = tok.encode(text).ids[-model.cfg.block:]
+    chunk = torch.tensor([ids], device=out.device)
+    CHUNK = 512
+    logits = None
+    for i in range(0, chunk.shape[1], CHUNK):
+        part = chunk[:, i:i + CHUNK]
+        trim_caches(caches, model.cfg.block - part.shape[1])
+        logits = model(part, caches=caches, pos_offset=where(caches))[0]
+    out = torch.cat([out, chunk], dim=1)
+    return out, caches, logits
+
+
 @torch.no_grad()
 def stream(prompt, max_new):
     from minagi.config import get as _g, load as _lc
@@ -244,22 +290,6 @@ def stream(prompt, max_new):
     c = _lc()
     strength = _g(c, "decoding.adapt_strength", 2.5)
     decay = _g(c, "decoding.adapt_decay", 0.88)
-
-    def where(caches):
-        """
-        The position the next character sits at: however much history the
-        cache still holds after trimming.
-
-        NOT a running count. Rotary tables are built for positions 0 to
-        block-1, so a counter that saturates at `block` asks for position
-        `block` on the very next character and the model refuses. Reading it
-        back off the cache cannot drift, because the cache is the thing the
-        positions have to agree with.
-        """
-        for c in caches:
-            if c.get("k") is not None:
-                return c["k"].shape[-2]
-        return 0
 
     model, tok = STATE["model"], STATE["tok"]
     device = next(model.parameters()).device
@@ -291,6 +321,7 @@ def stream(prompt, max_new):
     # The prompt's forwards have admitted its experts. Report them, so the
     # page starts the reply showing what is actually answering it.
     yield {"swap": {"at": 0, "moved": None, "pool": resident_experts()}}
+    n_tool = 0
     for i in range(max_new):
         loads = getattr(pool, "loads", 0)
         if logits is None:
@@ -306,9 +337,23 @@ def stream(prompt, max_new):
                         adapt_strength=strength, adapt_decay=decay)
         out = torch.cat([out, nxt], dim=1)
         cur = nxt
-        logits = None                       # spent; the next pass recomputes
+        logits = None
         produced.append(int(nxt[0, 0]))
         text = tok.decode(produced)
+        calls = tools_mod.parse_tool_calls(text) if TOOLS_ON else []
+        if calls and n_tool < MAX_TOOL_CALLS:
+            n_tool += 1
+            call = calls[0]
+            yield {"tool": {"name": call.name, "args": call.args}}
+            result = tools_mod.execute(REGISTRY, call)
+            RECEIPTS.append("tool", {"name": call.name, "args": call.args,
+                                     "ok": result.get("ok", False)})
+            res_text = tools_mod.result_text(result)
+            out, caches, logits = _prefill_text(out, caches, tok, res_text, model)
+            cur = out[:, -1:]
+            produced = []
+            yield {"t": res_text}
+            continue
         if text.endswith(B1):
             break
         yield {"t": tok.decode([produced[-1]])}
@@ -836,12 +881,21 @@ def main():
                     choices=["bf16", "fp16", "fp32"],
                     help="what the forward computes in; defaults to whatever "
                          "config.yaml trains with")
+    ap.add_argument("--no-tools", dest="tools", action="store_false",
+                    help="disable the tool-call loop")
     args = ap.parse_args()
 
     from minagi.config import get as _g, load as _lc
     from minagi.precision import set_compute_dtype
     set_compute_dtype(args.precision
                       or _g(_lc(), "training.precision", "bf16"))
+
+    global TOOLS_ON, MAX_TOOL_CALLS
+    c0 = _lc()
+    TOOLS_ON = args.tools
+    MAX_TOOL_CALLS = int(_g(c0, "interop.max_tool_calls", 4) or 0)
+
+    http_tool_mod.register_http_tools(REGISTRY, _g(c0, "interop", {}) or {})
 
     if not os.path.exists(os.path.join(args.weights, "core.npz")):
         raise SystemExit(
