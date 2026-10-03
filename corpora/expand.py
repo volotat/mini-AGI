@@ -46,6 +46,7 @@ SOURCES = [
     ("code", "data_char", ".py"),
     ("arithmetic", "data_math_char", ".txt"),
     ("chat", "data_chat_char", ".txt"),
+    ("self-knowledge", "data_self_knowledge_char", ".txt"),
     ("chess", "data_chess_char", ".txt"),
 ]
 
