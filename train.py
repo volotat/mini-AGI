@@ -50,6 +50,11 @@ from minagi.plasticity import Plasticity
 from minagi.optim import GradSNR
 from minagi import store as weights_store
 
+selfdir_log = []
+
+from minagi import ledger as ledger_mod
+from minagi import health as health_mod
+
 
 def lr_at(step, total, base, warmup, floor_frac=0.1):
     if step < warmup:
@@ -1042,6 +1047,10 @@ def cmd_read(args):
               f"at {float(before or 1.2):.3f} nats each", flush=True)
     grads = collections.deque(maxlen=400)      # and the gradient norms
     last_save = time.time()
+    last_held = None
+    held_hist = []
+    os.makedirs("runs", exist_ok=True)
+    receipts = ledger_mod.ReceiptLedger(os.path.join("runs", "receipts.jsonl"))
     mark_t, mark_c = time.time(), 0            # for the reading rate
     tracer = (_Tracer(args.trace_routes, args.trace_chunks)
               if args.trace_routes else None)
@@ -1157,6 +1166,13 @@ def cmd_read(args):
                         d = ev.run(sample_eval_steps)
                         se_ = d.pop("stderr", None)
                         v_ = float(np.mean(list(d.values())))
+                        last_held = v_
+                        held_hist.append(v_)
+                        if len(held_hist) >= 4:
+                            h = health_mod.certify(held_hist[-32:])
+                            receipts.append("health", h)
+                            if not h["cm"]:
+                                print(f"    health: {h['verdict']}", flush=True)
                         # The generalisation gap, kept for the growth
                         # decision. It is the thing the density ceiling was
                         # always a proxy for, and unlike density it is
@@ -1258,6 +1274,11 @@ def cmd_read(args):
                     # checkpoint - so a dry read that pruned and then stopped
                     # left a directory naming experts that were no longer
                     # there, and the next load died on the first missing file.
+                    if args.selfdir:
+                        _selfdir_reflect(model, tok, device, step, seen, plast,
+                                         pool, grower,
+                                         recent[-1] if recent else None,
+                                         last_held, args.selfdir_max_new)
                     gone = pool.prune(step, survival=survival_steps) \
                         if args.save else 0
                     # Whether the model may grow is asked of the model as
@@ -1584,6 +1605,47 @@ def sample_now(model, tok, device, n_new=140, variants=None):
     if was_training:
         model.train()
     return out
+
+
+@torch.no_grad()
+def _selfdir_reflect(model, tok, device, step, seen, plast, pool, grower,
+                     last_loss, last_held, max_new=64):
+    """Render telemetry, let the model continue it, apply any directive."""
+    from minagi import selfdir
+    from minagi.decode import pick_next
+    held = last_held if last_held is not None else 0.0
+    loss = last_loss if last_loss is not None else 0.0
+    block = selfdir.render_telemetry(step, seen, loss, held, plast, pool, grower)
+    ids = list(tok.encode(block).ids)[-model.cfg.block:]
+    cur = torch.tensor([ids], device=device)
+    caches = model.empty_caches()
+    _pool = getattr(model, "pool", None)
+    _held = list(_pool._h_keep) if getattr(_pool, "_h_keep", None) is not None else None
+    if hasattr(model, "peek_experts"):
+        model.peek_experts(cur, free=True)
+    off = 0
+    got = []
+    for _ in range(max_new):
+        logits, _ = model(cur, caches=caches, pos_offset=off)
+        off += cur.shape[1]
+        nxt = pick_next(logits[:, -1, :].float(),
+                        torch.tensor([ids + got], device=device),
+                        temperature=0.0, adapt_strength=2.5, adapt_decay=0.88)
+        t = int(nxt[0, 0])
+        got.append(t)
+        cur = nxt
+        if tok.decode(got).endswith(selfdir.P1):
+            break
+    if _pool is not None and _held is not None:
+        _pool._h_keep = _held
+    text = block + tok.decode(got)
+    directive = selfdir.parse_directive(text)
+    if directive is None:
+        print("    selfdir: no directive parsed", flush=True)
+        return
+    note = selfdir.apply_directive(plast, grower, directive)
+    print(f"    {note}", flush=True)
+    selfdir_log.append({"step": step, "applied": True, "note": note})
 
 # The training graphs, redrawn whenever the sample log gains an entry.
 #
@@ -2023,6 +2085,11 @@ def main():
                          "drawn from")
     rd.add_argument("--sample-every", type=float, default=0,
                     help="minutes between writing sample generations")
+    rd.add_argument("--selfdir", action="store_true",
+                    help="let the model steer its own learning rate and growth "
+                         "at the growth cadence (advisory, clamped)")
+    rd.add_argument("--selfdir-max-new", type=int, default=64,
+                    help="characters the model may write to state a directive")
     rd.add_argument("--sample-log", default="runs/samples.txt")
     rd.add_argument("--sample-chars", type=int, default=140)
     rd.add_argument("--save-every", type=float,
