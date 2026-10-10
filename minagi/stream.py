@@ -307,10 +307,17 @@ class FileReader:
 
         That factor is the difference between an evaluation that runs between
         samples and one that costs more than the training it is measuring.
+
+        Cap each read by the remaining rotary table. Training already windows
+        to `context`; evaluation used to feed a full `chunk` from position 0,
+        which crashes when chunk > context (#18).
         """
         if self.caches is None or self.seen + n > self.context:
             self.caches = self.model.empty_caches()
             self.seen = 0
+        n = min(n, self.context - self.seen)
+        if n < 2:
+            return None
         a = self.data[self.pos:self.pos + n + 1].astype(np.int64)
         x = torch.from_numpy(a[:-1]).to(self.device).unsqueeze(0)
         y = torch.from_numpy(a[1:]).to(self.device).unsqueeze(0)
