@@ -59,5 +59,8 @@ class GradSNR:
         """0 = pure noise, 1 = every step pointing the same way."""
         if self.m is None or self.sq <= 0 or self.n < 8:
             return None
-        c = 1 - self.beta ** self.n                  # bias correction
-        return float((self.m / c).pow(2).sum() / (self.sq / c))
+        # No bias correction: both averages start at the first reading, not
+        # at zero, so neither is biased toward zero. Dividing by 1 - beta^n
+        # here inflated the ratio by that factor - 6.7x at the eighth reading,
+        # and a constant gradient read above one.
+        return float(self.m.pow(2).sum() / self.sq)
