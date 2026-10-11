@@ -31,6 +31,7 @@ interrupted save cannot leave a half-written weight behind.
 import json
 import os
 import sys
+import tempfile
 
 import numpy as np
 import torch
@@ -38,6 +39,42 @@ import torch
 from .precision import pack_bf16, unpack_bf16
 
 CORE, ROUTERS, EXPERTS, OPTIM = "core", "routers", "experts", "optim"
+
+
+class WeightShadow:
+    """Temporary storage for a dry read's model or changed experts."""
+
+    def __init__(self, source):
+        source = os.path.abspath(source)
+        parent = os.path.dirname(source)
+        while not os.path.isdir(parent):
+            above = os.path.dirname(parent)
+            if above == parent:
+                parent = None
+                break
+            parent = above
+        try:
+            self._tmp = tempfile.TemporaryDirectory(
+                prefix=".minagi-dry-", dir=parent,
+                ignore_cleanup_errors=True)
+        except OSError:
+            self._tmp = tempfile.TemporaryDirectory(
+                prefix="minagi-dry-", ignore_cleanup_errors=True)
+        self.path = os.path.join(self._tmp.name, "weights")
+
+    def cleanup(self):
+        self._tmp.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.cleanup()
+
+
+def shadow(path):
+    """Return temporary storage for a dry read of a weights directory."""
+    return WeightShadow(path)
 
 
 def _is_expert(key):
@@ -179,6 +216,9 @@ def _save_paged(model, pool, path, step, val, opt, cfg, verbose, extra=None):
     resident - with its optimiser moments - and writing the manifest around
     what is there. Nothing is gathered and nothing is deleted.
     """
+    if os.path.abspath(pool.tiers.write_path) != os.path.abspath(pool.tiers.path):
+        raise RuntimeError(
+            "cannot checkpoint a pool with a temporary expert overlay")
     pool.flush()
     core, routers = {}, {}
     for k, v in model.state_dict().items():
