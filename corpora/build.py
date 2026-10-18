@@ -114,8 +114,11 @@ def build_chess(_):
     return _generated("chess", "chess")
 
 
-def build_self_knowledge(_):
-    return _generated("chat", "chat")
+def build_self_knowledge(limit):
+    extra = ["--out", "data_self_knowledge_char", "--self-only"]
+    if limit:
+        extra += ["--conversations", limit, "--val", max(1, limit // 100)]
+    return _generated("chat", "self-knowledge", *extra)
 
 
 BUILDERS = {
@@ -171,9 +174,10 @@ def main():
             limit = a.limit
         else:
             limit = 0 if a.full else SAMPLED.get(name, 0)
-        fn(limit)
-        if not _has_files(where):
-            print(f"!! {name} produced nothing - carrying on", file=sys.stderr)
+        rc = fn(limit)
+        if rc or not _has_files(where):
+            print(f"!! {name} failed or produced nothing - carrying on",
+                  file=sys.stderr)
             failed.append(name)
 
     print("\ncorpus:")
