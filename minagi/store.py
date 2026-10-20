@@ -31,6 +31,7 @@ interrupted save cannot leave a half-written weight behind.
 import json
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -38,6 +39,23 @@ import torch
 from .precision import pack_bf16, unpack_bf16
 
 CORE, ROUTERS, EXPERTS, OPTIM = "core", "routers", "experts", "optim"
+
+
+def _replace(tmp, dst, attempts=8):
+    """Retry transient Windows reader locks while keeping publication atomic.
+
+    Readers opened without delete sharing can block os.replace on Windows.
+    Eight attempts allow 6.35 seconds of backoff; persistent permission
+    failures are re-raised, and other errors propagate immediately.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * 2 ** i)
 
 
 def _is_expert(key):
@@ -144,7 +162,7 @@ def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
     tmp = os.path.join(path, "manifest.json.tmp")
     with open(tmp, "w") as f:
         json.dump(manifest, f, indent=1)
-    os.replace(tmp, os.path.join(path, "manifest.json"))
+    _replace(tmp, os.path.join(path, "manifest.json"))
     if verbose:
         n_files = len(entries) + 3
         print(f"  weights/: {len(entries)} experts + 3 bundles = {n_files} files, "
@@ -250,7 +268,7 @@ def _save_paged(model, pool, path, step, val, opt, cfg, verbose, extra=None):
     tmp = os.path.join(path, "manifest.json.tmp")
     with open(tmp, "w") as f:
         json.dump(manifest, f, indent=1)
-    os.replace(tmp, os.path.join(path, "manifest.json"))
+    _replace(tmp, os.path.join(path, "manifest.json"))
     if verbose:
         print(f"  weights/: {len(entries)} experts + 3 bundles, "
               f"{total/1e6:.1f} MB (paged - experts were already on disk)")
@@ -261,7 +279,7 @@ def _savez(path, arrays):
     """Atomic bundle write."""
     tmp = path + ".tmp.npz"
     np.savez(tmp, **arrays)
-    os.replace(tmp, path)
+    _replace(tmp, path)
     return sum(a.nbytes for a in arrays.values())
 
 
