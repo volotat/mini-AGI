@@ -122,10 +122,12 @@ def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
                         and i < gate.numel() else 1.0})
     live = {e["file"] for e in entries}
     ed = os.path.join(path, EXPERTS)
+    # Count the stale files now, but do not delete them until the new
+    # manifest is durable. Deleting first could leave the old manifest naming
+    # a file that no longer exists if the process dies in between.
     removed = 0
     for f in os.listdir(ed):
         if f.endswith((".npy", ".npz")) and f not in live:
-            os.remove(os.path.join(ed, f))
             removed += 1
 
     if opt is not None:
@@ -150,6 +152,9 @@ def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
         print(f"  weights/: {len(entries)} experts + 3 bundles = {n_files} files, "
               f"{total/1e6:.1f} MB"
               + (f", {removed} expert files removed" if removed else ""))
+    for f in os.listdir(ed):
+        if f.endswith((".npy", ".npz")) and f not in live:
+            os.remove(os.path.join(ed, f))
     return len(entries), total
 
 
