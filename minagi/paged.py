@@ -84,10 +84,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from numpy.lib import format as npy
 
+from .muon import keeps_second, second_moment
 from .precision import as_bf16, is_moment, pack_bf16
 
 _WEIGHTS = ("w1", "w3", "w2")
 _MOMENTS = ("w1_m", "w3_m", "w2_m", "w1_v", "w3_v", "w2_v")
+_FIRST = _MOMENTS[:3]                         # the momentum alone, as Muon keeps
 _ZIP_LOCAL = struct.Struct("<4s5H3L2H")       # a zip member's local file header
 
 
@@ -211,6 +213,9 @@ class Tiers:
         self.read_only = read_only
         self.dirty = set()
         self.reads = self.hits = self.evictions = self.writebacks = 0
+        # the moments an expert's file is read and written with: AdamW's two,
+        # or the momentum alone (PagedPool.keep_second_moment)
+        self.moments = _MOMENTS
         self.write_behind = write_behind
         self.pending = {}            # id -> entry the writer has yet to land
         self._lock = threading.Lock()
@@ -231,11 +236,11 @@ class Tiers:
         file the whole of what that expert is, which is what the weights
         directory claims about itself.
         """
-        z = read_npz(self._file(i), _WEIGHTS + _MOMENTS)
+        z = read_npz(self._file(i), _WEIGHTS + self.moments)
         # every array was read into memory of its own, so the tensors take it
         # over rather than copying it
         out = {k: torch.from_numpy(z[k]) for k in _WEIGHTS}
-        for k in _MOMENTS:
+        for k in self.moments:
             if k in z:
                 # Kept as the file keeps them, bfloat16: half the memory of
                 # fp32, so the RAM tier holds half as many again in the same
@@ -330,13 +335,15 @@ class Tiers:
     def _to_disk(self, i, ent):
         if self.read_only:
             raise RuntimeError("read-only pool tried to write e%05d.npz" % i)
-        # Weights fp32, Adam's moments bf16. The moments are two thirds of the
-        # file and cost a thousandth of their own magnitude to narrow, because
-        # what they need is exponent range and bf16 keeps all of fp32's. The
-        # weights cannot go with them - see minagi/precision.py, which has the
-        # measurement for both.
+        # Weights fp32, the optimiser's moments bf16. AdamW's two are two
+        # thirds of the file, Muon's one a third, and they cost a thousandth of
+        # their own magnitude to narrow, because what they need is exponent
+        # range and bf16 keeps all of fp32's. The weights cannot go with them -
+        # see minagi/precision.py, which has the measurement for both. A
+        # moment the optimiser does not keep is not written.
         arrays = {k: (pack_bf16(v) if is_moment(k) else v.to(torch.float32).numpy())
-                  for k, v in ent.items() if torch.is_tensor(v)}
+                  for k, v in ent.items() if torch.is_tensor(v)
+                  and (not is_moment(k) or k in self.moments)}
         tmp = self._file(i) + ".tmp.npz"
         np.savez(tmp, **arrays)
         os.replace(tmp, self._file(i))
@@ -418,6 +425,7 @@ class PagedPool(nn.Module):
         self.want_k = 0.0
         self.swaps = 0
         self._opt = None
+        self.second_moment = True     # AdamW's, unless Muon steps the experts
         self._sites = []          # the call sites routing into this pool
         # THE PRUNE CLOCK: the text count at which each expert was last
         # admitted. An expert nothing admits is deleted once this falls far
@@ -470,14 +478,30 @@ class PagedPool(nn.Module):
         # the router's scores where experts are CHOSEN (what a character asks
         # the card for, and its top_k among the card) and nowhere else: the
         # weights the chosen are mixed with stay the router's own, and nothing
-        # of it enters the loss. After every optimiser step it moves each
-        # expert's offset by `route_bias`, by sign, toward the share of
-        # training choices its rank should have - 1 / (rank + offset),
-        # normalised - as the auxiliary-loss-free balancing of DeepSeek-V3
-        # does toward an even share, and centred as Moonlight centres it.
+        # of it enters the loss. After every optimiser step it moves offsets
+        # by `route_bias`, by sign, as the auxiliary-loss-free balancing of
+        # DeepSeek-V3 does, by one of two rules:
+        #   the curve  (pool.route_floor 0) every expert toward the share of
+        #              training choices its rank should have, 1 / (rank +
+        #              offset) normalised, centred as Moonlight centres it.
+        #              It cost 0.31 of held-out (E35): it moves the strong
+        #              experts' characters onto weak ones.
+        #   the floor  (pool.route_floor above 0) only experts inside their
+        #              trial, and only upward. One taking less than
+        #              route_floor of an even share of training choices rises
+        #              a step; one taking that much or more falls a step, never
+        #              below 0; every other expert's offset is 0. A newborn
+        #              whose router row no text asks for is lifted until it is
+        #              chosen, and lets go as its own row earns it the share;
+        #              once its trial ends it lives or dies by its own use, so
+        #              pruning still tells a useful expert from a useless one.
+        #              Under this rule a request also carries the lifted
+        #              probability into the card's vote: a newborn the router
+        #              barely wants could otherwise never outvote the card's
+        #              regulars, however often characters asked for it.
         # `chosen` is each expert's share of training choices, a running
         # average over about fifty steps. Both are saved with the weights, so
-        # reading and chat choose as training does; with the setting at 0 the
+        # reading and chat choose as training does; with route_bias at 0 the
         # offsets are not used at all.
         self.register_buffer("bias", torch.zeros(n_experts), persistent=False)
         self.register_buffer("chosen", torch.zeros(n_experts),
@@ -487,6 +511,7 @@ class PagedPool(nn.Module):
         self.route_bias = 0.0
         self.route_bias_offset = 25.0
         self.route_bias_max = 4.0
+        self.route_floor = 0.0
         self.chosen_steps = 50.0
         # WEIGHTED AFTER THE GATES (pool.gate_after) - see PooledMLP._route
         self.gate_after = False
@@ -648,11 +673,24 @@ class PagedPool(nn.Module):
             return None
         return self.bias[:self._n]
 
+    def vote_lifted(self):
+        """Whether a character's request carries the lifted probability into
+        the card's vote: under the floor rule only - see `bias`."""
+        return bool(self.route_bias) and self.route_floor > 0
+
+    def on_trial(self):
+        """Which experts are inside their trial: born fewer than `trial` steps
+        before `now`. None of them while `trial` is unset."""
+        n = self._n
+        if not self.trial:
+            return torch.zeros(n, dtype=torch.bool, device=self.born.device)
+        return (float(self.now) - self.born[:n]) < float(self.trial)
+
     @torch.no_grad()
     def _steer_bias(self, *_):
-        """After a step: this step's training choices into `chosen`, and every
-        offset one step of `route_bias` toward its rank's share of the curve
-        1 / (rank + route_bias_offset) - see `bias`."""
+        """After a step: this step's training choices into `chosen`, and the
+        offsets one step of `route_bias` by the rule in force - the floor, or
+        the curve 1 / (rank + route_bias_offset). See `bias`."""
         n = self._n
         h = self._step_hits[:n].clone()
         self._step_hits.zero_()
@@ -664,6 +702,16 @@ class PagedPool(nn.Module):
         c = self.chosen[:n]
         b = 1.0 / max(self.chosen_steps, 1.0)
         c.mul_(1.0 - b).add_(b * h / tot)
+        if self.route_floor > 0:
+            # THE FLOOR: below it a step up, at or above it a step down to no
+            # lower than 0, and outside its trial no offset at all
+            low = c < float(self.route_floor) / max(n, 1)
+            off = self.bias[:n]
+            off.add_(torch.where(low, 1.0, -1.0).to(off.dtype)
+                     * float(self.route_bias))
+            off.clamp_(0.0, self.route_bias_max)
+            off.mul_(self.on_trial().to(off.dtype))
+            return
         order = torch.argsort(c, descending=True)
         curve = 1.0 / (torch.arange(n, device=c.device, dtype=c.dtype)
                        + float(self.route_bias_offset))
@@ -684,16 +732,17 @@ class PagedPool(nn.Module):
         """
         What the pool costs on disk, and what `extra` more experts would cost.
 
-        EIGHT bytes per parameter, which is what the files actually hold: one
-        fp32 weight (4) plus Adam's two moments as bf16 (2 + 2). At d_model 512
-        and d_ff 2048 that is 25.2 MB an expert.
+        What the files actually hold: one fp32 weight (4 bytes a parameter)
+        and the optimiser's moments as bf16 - AdamW's two (2 + 2), EIGHT bytes
+        a parameter, or Muon's momentum alone (2), SIX. At d_model 512 and
+        d_ff 2048 that is 25.2 MB an expert under AdamW, 18.9 MB under Muon.
 
         `growth.max_disk_gb` is enforced against this number, so it has to
         match the files rather than the widest possible layout - an estimate
         that assumed fp32 moments would run 1.5x over and stop growth well
         short of the budget it was given.
         """
-        per = 3 * self.d_model * self.d_ff * 8
+        per = 3 * self.d_model * self.d_ff * (8 if self.second_moment else 6)
         return (self._n + int(extra)) * per
 
     def vram_params(self):
@@ -996,12 +1045,13 @@ class PagedPool(nn.Module):
                     # narrowed on the card, so half the bytes cross the bus
                     ent[nm + "_m"] = o["exp_avg"][s].to(torch.bfloat16).to(
                         "cpu", copy=True)
-                    ent[nm + "_v"] = o["exp_avg_sq"][s].to(torch.bfloat16).to(
-                        "cpu", copy=True)
+                    if "exp_avg_sq" in o:
+                        ent[nm + "_v"] = o["exp_avg_sq"][s].to(
+                            torch.bfloat16).to("cpu", copy=True)
         else:
             ent.update({k: v for k, v in
                         self.tiers.fetch(self._f(e), count=False).items()
-                        if is_moment(k)})
+                        if k in self.tiers.moments})
         return ent
 
     def _moment_state(self):
@@ -1043,16 +1093,21 @@ class PagedPool(nn.Module):
                 continue
             src = self.tiers.fetch(self._f(e), count=False)
             for nm, o in zip(names, sts):
+                v = o.get("exp_avg_sq")            # none where Muon steps
                 if nm + "_m" in src:
                     # across at the width RAM keeps them and widened on the
                     # card: copy_ from the CPU with a dtype change would widen
                     # them first and send twice the bytes
                     dev = o["exp_avg"].device
                     o["exp_avg"][s].copy_(src[nm + "_m"].to(dev))
-                    o["exp_avg_sq"][s].copy_(src[nm + "_v"].to(dev))
+                    if v is not None:
+                        # a file written while Muon stepped it has none
+                        v[s].copy_(src[nm + "_v"].to(dev) if nm + "_v" in src
+                                   else second_moment(o["exp_avg"][s]))
                 else:
                     o["exp_avg"][s].zero_()
-                    o["exp_avg_sq"][s].zero_()
+                    if v is not None:
+                        v[s].zero_()
             self._own[s] = True
         self._own_in = [weakref.ref(o["exp_avg"]) for o in sts]
 
@@ -1449,17 +1504,38 @@ class PagedPool(nn.Module):
         each step every expert on the card gets its own moments
         (_own_moments), after it the step is counted (_count_step). A
         different optimiser holds nobody's moments yet, so every slot is
-        filled again before its first step.
+        filled again before its first step. Whether it keeps a second moment
+        for the experts decides whether their files carry one
+        (keep_second_moment).
         """
         if opt is not self._opt:
             self._own = [False] * self.resident
             self._own_in = None
         self._opt = opt
+        if opt is not None:
+            self.keep_second_moment(keeps_second(opt, self.w1))
         if opt is not None and id(opt) not in self._hooked:
             opt.register_step_pre_hook(self._own_moments)
             opt.register_step_post_hook(self._count_step)
             opt.register_step_post_hook(self._steer_bias)
             self._hooked.add(id(opt))
+
+    def keep_second_moment(self, keep):
+        """
+        Whether the experts carry AdamW's second moment. Muon keeps only a
+        momentum (minagi/muon.py), so under it their files are read and
+        written without one, the entries already in RAM let theirs go, and an
+        expert costs six bytes a parameter on disk and in RAM rather than
+        eight. An entry is replaced rather than changed in place: the writer
+        may be writing the same one.
+        """
+        self.second_moment = bool(keep)
+        self.tiers.moments = _MOMENTS if keep else _FIRST
+        if not keep:
+            for i, ent in list(self.tiers.ram.items()):
+                if any(k.endswith("_v") for k in ent):
+                    self.tiers.ram[i] = {k: v for k, v in ent.items()
+                                         if not k.endswith("_v")}
 
     def attach_sites(self, model):
         """

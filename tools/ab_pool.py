@@ -253,6 +253,7 @@ def evaluate(wdir, out, blocks):
     rec = {"weights": wdir, "config": os.environ.get("MINAGI_CONFIG"),
            "gate_after": getattr(pool, "gate_after", False),
            "route_bias": getattr(pool, "route_bias", 0.0),
+           "route_floor": getattr(pool, "route_floor", 0.0),
            "step": man.get("step"), "chars": man.get("read_chars"),
            "blocks": got, "seconds": round(time.time() - t, 1),
            "uid": [int(v) for v in pool.uid[:n]],

@@ -307,3 +307,205 @@ By the same arithmetic the equal turns before 2,329.0M gave characters as arithm
 schedule's seed assumes (and that lanes.py's docstring says self-knowledge got). Within a lane a short file is read
 whole at every draw and a long one only a window, so coverage per byte favours short files. Nothing was changed:
 paying credit by characters read, or drawing files by size, changes the run's reading and is the author's call.
+Changed 11-03 at the author's call: credit is paid by characters read (history.md). Estimated then over the last 500M
+characters (visit share x mean visit, as above): chess 16.4% of characters against a 7.0% share, arithmetic 7.4%
+against 3.1%, wikipedia 11.3% against 29.6%, code 11.3% against 16.2%. If each subject learned only from its own
+lane, reading by characters would have taken the 8-subject average from -0.0008 to -0.0012 a 100M characters - a
+bound, since what one subject teaches another is left out. Files are still drawn uniformly within a lane.
+
+## The weights themselves (2026-10-31 .. 11-03)
+
+**E48 issue #33: admission sees the whole forward (2026-10-31/11-01, partial).** On a copy of the weights at step
+1,773,530: a forward admits the experts its first pass asks for, tallied over all of its characters, so an
+earlier character's prediction can use experts a later character asked for. The same spread blocks scored the
+published way and causally (each position admitted from the characters up to it), causal minus published in
+nats/char: arithmetic +0.0049 +/-0.0005, chat +0.0113 +/-0.0020, chat_hermes +0.0111 +/-0.0013, chess +0.0037
++/-0.0006, code +0.0112 +/-0.0022 (23 blocks); 143 of 240 blocks, reasoning, stories, wikipedia and 7 code blocks
+not yet measured. Published twice: +/-0.0002. Nearly all of it is in each block's first 2,048 characters. A
+cheaper approximation overshoots by +0.0026 to +0.0103. Per block: published 0.33 s, the approximation 1.14 s,
+exactly causal ~11 s. Not a correction yet: the remaining blocks and the fix come first (corrections.md).
+
+**E49 what the weights hold (2026-11-03, step 1,983,054, 400 experts).** Read-only, on the CPU, after the
+"Weight-Space Programming" post (Takehi, Teoh, Zhang, Khattab, MIT CSAIL, 2026-11-02): weight-matrix products,
+decoding through the tied embedding, spectra; then forward probes on held-out text.
+- Embeddings: 153 of 265 byte vectors lie within cosine 0.9 of one direction - every non-ASCII and control
+  byte, and `~`; the 13 bytes UTF-8 never uses are identical, the CJK lead bytes E4-E9 0.997, the Cyrillic D0/D1
+  0.995, the continuation bytes 0.955 pairwise; norm against log frequency -0.91. The same at 2,329M (154). The
+  output side pushes every rarely-correct byte the same way, and with tied embeddings that is their input too.
+  Non-ASCII bytes cost 2.0-2.4 nats against 0.84 for ASCII in the same windows; they are at most 0.63% of a
+  held-out subject (wikipedia). Digits are ordered (7's nearest: 8, 6, 9, 5); newline sits with `<user>`,
+  `</user>`, `<|endoftext|>`.
+- Router: 256 of 400 rows have a twin above cosine 0.9 even with the mean row removed (grown experts' nearest
+  median 0.95, originals' 0.37); grown rows' own part is half the originals' (0.45 against 0.93); the
+  differences take ~33 directions for 90% of their energy. The experts are distinct: cosine of w2 @ w1, which
+  ignores how an expert orders its units, has median nearest 0.12 and nothing above 0.5 but e18's family.
+- Gates: 72 below 0.01 (1.3% of use; momentum ~100x below the loud experts'), 348 below 0.1; the 20 above 1
+  carry 44.7% of use. Grown gates' median 0.040 at 1.5B, 0.034 at 4.06B; originals' 1.02 -> 1.31. The gate is
+  one tensor, and its decoupled decay shrinks every expert's gate at every step.
+- Specialists: chess sends 58% of its requests to e6, arithmetic 25% to e18 and 13% to e184; their w2 stable
+  ranks are 3.3, 5.9 and 9.0 against a median of 43. Most other subjects share originals (e2, e58, e9, e35, e33).
+- Attention: positive copying scores (eigenvalues of the direct path through the tied embedding) for prelude.0
+  heads 1, 4, 5, 7 and recur head 3, negative for most others; recur head 5's keys compose with prelude.0 heads
+  4-7 at ~3x random. A repeated random string of letters: 3.96 nats, then 1.96 on the repeat.
+- Since 2,329M: the median expert moved 4.3%, trunk matrices 5-10%, embeddings 22%; stable ranks unchanged; 14
+  dead hidden units of 819,200; spectral tail exponents 3-4.
+- Read out after each row on 512-character snippets, the prediction stops improving by row ~8 (0.0065 better
+  than the halted output); on full 4,096-character windows it does not (E50).
+
+**E50 edits to the weights and the read-out (2026-11-03, step 1,983,939, 401 experts).** Every change made in
+memory on a copy; chosen on a dev set of training files (8 subjects x 15 blocks), the finalists measured once
+on held-out, where the unedited model reproduces the run's own 0.5658. Cross-entropy change on dev:
+- rows capped at 10 / 12 / 16 / 20: -0.0002 / -0.0001 / -0.0001 / 0.0000 (8: +0.0033 on a 2-block check);
+  allowed 28 / 32: +0.0001 / 0.0000; halt_thresh 0.8 / 0.95 / 0.99: 0.0000 / +0.0002 / +0.0002
+- logit temperature 0.95 / 1.05: +0.0002 / +0.0015; mixing the rows' probabilities instead of their logits:
+  +0.0002
+- gates below 0.01 zeroed: +0.0001 (below 0.03: +0.0002); grown experts' gates x0.8 / 1.25 / 1.5 / 2: +0.0013 /
+  +0.0022 / +0.0077 / +0.0314; all gates x0.9 / 1.1: +0.0029 / +0.0017; a floor of 0.05 / 0.1: +0.0029 / +0.0133
+- grown router rows' own part x1.5 / 0.7: +0.0204 / +0.0718
+Held-out: the 12-row ceiling -0.0001 (evaluation ~18% faster on dev), gates below 0.01 zeroed 0.0000. The
+held-out figure is halting-weighted cross-entropy 0.5588 plus the 0.01 KL term 0.0069; the returned logits
+(the halting-weighted mixture) score 0.5572. Verdict: no edit improves held-out; the weights sit at a sharp
+optimum for edits like these, and the near-twin router rows' small differences carry real information.
+
+**E51 removing the quietest experts is not zeroing them (2026-11-03, step 1,986,517, 404 experts).** On a copy,
+`PagedPool.drop_quietest(70)` - what `train.py read --drop-quietest 70` runs - removed the 70 experts with |gate|
+0.0040-0.0101 that were off the card and past their newborn window (77 had gates below 0.01; the 7 newborns were
+spared; 2 of the 70 were above 0.01 because 2 below were on the card). Held-out 0.5658 -> 0.5674, cross-entropy
+0.5572 -> 0.5587 (+0.0014; chat_hermes +0.0039, wikipedia +0.0036, chess 0.0000); dev cross-entropy +0.0010.
+Zeroing the same experts' gates had cost 0.0000 (E50): a zero-gate expert is still chosen and adds nothing, while a
+removed one sends its characters to the next expert in line, which adds something. The quiet experts work as the
+router's "add nothing" choice - the pool's own prune() rule warns that a low gate can mark a busy expert. Verdict:
+not dropped; +0.0014 is about 175M characters of the current progress.
+
+**E52 newborns since births resumed are never chosen (2026-11-04, step 2,045,378, 410 experts).** Births stopped
+at the disk ceiling (397 experts) from 10-19 (2,452M) until one moment per expert raised it to ~529 on 11-03;
+growth then added one expert every 3,906 steps (8M characters). From `runs/expert_history.jsonl` (every check's
+gates, use, admissions and births):
+- All 22 experts born since (from step 1,980,379) were admitted to no forward and routed no characters; their
+  gates sit at birth_gate, 0.0010. The 9 past their 48,828-step trial were pruned unused.
+- Earlier newborns were chosen from the start. In their first 50,000 steps, median 1,822 admissions and 20.3M
+  characters routed (born before 2,222.9M, AdamW, one rate), and 1,364 and 16.0M (born under the newborn rate,
+  2,222.9-3,194.4M).
+- Median gate by age. Born 1,500-2,222.9M (AdamW, one rate; 19 experts): 0.0011 at 5k steps, 0.0105 at 25k,
+  0.0275 at 100k, 0.041 at 400k. Born under the newborn rate (100): 0.0133 at 5k, falling to 0.0073 at 50k and
+  0.0068 at 100k, 0.0092 at 400k - a fast start that reversed and settled 4-5x lower.
+- The newborns' router rows sit on the pool's average direction (cosine to the established experts' mean row 0.963,
+  against 0.699 for the established) and are shorter (norm 0.50 against 0.69): averaged from 16 random parents,
+  they are asked for nowhere in particular.
+- A row that is never admitted gets only the balance term's gradient; the language-model gradient reaches only
+  the admitted rows (`PooledMLP._route`). In the router's saved momentum (bf16, unpacked) the newborn rows have norm
+  ~2e-8 against an established median of 6.7e-8, while the rows in use put the top singular values at ~2e-3: five
+  orders of magnitude. After Muon's orthogonalisation (5 Newton-Schulz steps) only ~104 of the 410 directions get
+  a full-size update (singular value above 0.5; median 0.0014). A newborn row gets ~8e-4 of a unit row update, an
+  established one a median 3.4e-3. At x0.0087 that moves a newborn's row ~1e-8 a step, ~0.01 of a logit in 50,000
+  steps. Under AdamW each element is scaled by its own history, so a row with a small but steady gradient moves
+  at the full rate whatever the gradient's size; that is what the balance term was built on
+  (`PagedPool.note_balance`).
+- Not caused by the 11-03 changes, which touch no routing, admission, balance or growth code; they only let births
+  resume. Two things changed in the 1.6B characters without births: Muon took over the router (10-27, 3,194.4M),
+  and the controller eased the rate from ~x0.03 to x0.0087. The momentum above points at Muon on the router as the
+  main cause, with the averaged newborn row adding to it. Raising `pool.balance` would not get past it: the idle
+  rows' balance gradient sits about five orders of magnitude below the rows in use, so the weight would have to
+  rise ~1,000-100,000x, which flattens usage for every expert (E21, E35). Untested on a copy. A copy with forced
+  births would say, with arms for the router under AdamW and a newborn row taken from its largest parent.
+Verdict: growth adds nothing while this holds; each newborn lives through its trial unused and is pruned. Harmless
+to the loss, since an expert that is never admitted is never in a forward.
+
+**E53 the routing bias's floor rule on a tiny model (2026-11-04, CPU).** A paged model of 32 experts (resident 4,
+top_k 2, d_model 32) was trained 400 steps as chat learning trains (LiveLearner, Muon, lr 3e-4). One expert was
+then added by recombination, and training went on from that state twice on the same text: routing bias off,
+and the floor rule on (floor 0.1 of an even share). The newborn's router row started at cosine 0.695 to the
+pool's mean row.
+- Trial of 200 steps, offset step 0.05 (trial x step ~10, as 48,828 x 2e-4 is): off, never admitted in 400 steps
+  (gate 0.0010; row moved 0.008). Floor: admitted 12 times in its trial, 1,459 characters routed, gate 0.0010 ->
+  0.016, row moved 0.035.
+- Trial of 1,500 steps, step 0.01: off, admitted 5 times, 432 characters, gate peaked 0.0053 and fell to 0.0030.
+  Floor: admitted 70 times, 8,226 characters (19x), gate 0.0010 -> 0.088, row moved 0.07; the offset peaked at
+  1.13 and was near 0 at times while admissions went on, so its own row was earning part of its share.
+- In both runs, once the trial ended (and so the offset), no fresh window admitted it on its own (0 of 20).
+Verdict: the rule does what it is for. A newborn whose row no text asks for gets onto the card, is trained, and
+its gate climbs while it is chosen. Whether a newborn then stands on its own row is not decided by the rule; in
+this tiny model the one tried did not. In the run, the first lifted newborns finish their trial ~100M
+characters (~18 hours) after the restart: check their admissions after it (as E52 did).
+
+**E54 the floor rule in the run, its first hour (2026-11-04).** The run restarted at step 2,075,068 with
+route_bias 2e-4 and route_floor 0.1. Twelve experts were on trial, born 2,031,120 to 2,074,086, one every 3,906
+steps. After 1,110 steps each of the twelve carried an offset of 0.222 (1,110 x 2e-4), every other expert 0, as
+the rule says, and none had been admitted yet. How large an offset does a newborn need? Admission is decided by a
+forward's first pass, whose router input depends on the trunk alone, so it was measured on that checkpoint with
+no expert loaded: 6 windows of 2,048 characters per subject, the offsets put on the twelve by hand.
+- Router scores lie close together. Per character they spread 0.46-0.65 (standard deviation across the 410
+  experts), and a newborn sits a median 0.68-0.82 below the character's 8th choice (chess 0.94, arithmetic
+  1.28; the nearest characters 0.07-0.27).
+- At 0.222, at most 0.7% of characters ask for a newborn, and no window admits one. At 0.5, 33-42% of the
+  characters in chat, code, reasoning, self-knowledge and wikipedia ask, and every window admits 4-8 newborns;
+  stories admit in 83% of windows. Arithmetic and chess need 0.75.
+- The twelve rise together and their rows are nearly the same (all near the pool's mean row). Above 1.0 they
+  would take 10-12 of the card's 32 slots in every window, and at 2.0 nearly every character's choices. What
+  stops that is the rule's own feedback: an expert whose 50-step share of choices reaches the floor starts
+  falling, a few to 50 steps (at most 0.01 of offset) after it crosses.
+- The first admissions came before the median window's edge. By step 2,076,737 (offset 0.333, 1,669 steps
+  after the restart), two of the twelve had been loaded onto the card, 3 times and once, and had routed 1,012
+  and 35 characters. They are the first newborns admitted since births resumed on 11-03. The tails of the
+  training text admit before the median window does. Held-out stayed at 0.5641-0.5642 (0.5644 at the last
+  check before the restart).
+- By step 2,077,305 (2,237 steps after the restart), 11 of the twelve had been admitted: 1-9 loads each,
+  9,504-300,674 characters, 1.32M in all. The feedback had held every admitted one below the 0.447 the rule
+  alone gives (0.326-0.437); the one never admitted was still at 0.447. Their 50-step shares were 0.01-2.8x
+  an even share, gates 0.0010-0.0011, held-out 0.56425. The twelve did not flood the card: each found its own
+  level. Gates move slowly at the controller's rate (x0.0086 of 3e-4, ~2.6e-6 a step).
+- The first trial to end under the rule (born 2,031,120, trial over at step 2,079,948) had been loaded onto the
+  card 21 times and routed 908,296 characters while lifted, its gate 0.0010 -> 0.0012. In the 2,968 steps after,
+  its offset 0, it was not admitted once. By step 2,082,916 the others had been loaded 17-80 times and routed
+  0.5-3.0M characters each, gates 0.0009-0.0015. Their held offsets stayed within about 0.02 of where they were
+  two hours earlier (0.31-0.45): an offset held by the floor measures how far the newborn's own row falls short
+  of the card's edge, and in those two hours no row closed its gap. Held-out averaged 0.56444 over the 11
+  checks after the newborns entered, against 0.56454 over the 8 checks before the restart: no cost seen.
+Expected: the run makes ~2,800 steps an hour, so the offsets climb ~0.56 an hour and reach 0.5 about an hour
+after the restart. From then most windows admit newborns, and each offset should hover near its own edge,
+where its newborn takes a tenth of an even share. To check: held-out over the next hours (the twelve enter together);
+each newborn's offset and share; and admissions after the trial ends. The oldest, born 2,031,120, leaves its
+trial at step 2,079,948 after at most ~2,400 steps on the card. The first newborn lifted for a whole trial is
+one born after the restart. Past its trial, prune keeps an expert until it has gone a whole trial (48,828
+steps) without an admission, so a newborn that is never chosen on its own row fades out ~17 hours after its
+last lifted admission.
+Verdict at 3.5 hours (step 2,084,590): the rule fixed admission, and nothing more is shown yet. All 14 newborns
+lifted since the restart were admitted (0.5-3.5M characters each). Held-out since the restart sits 0.0002 below
+the line of the 12 hours before. But that gap was there at the first checks, before any newborn was admitted, and
+the 8 restarts of 10-28 to 11-03 moved held-out by -0.0013 to +0.0012 against their own lines, so a comparison
+across a restart cannot see an effect this size. Both newborns whose trials had ended (4,390 and 557 steps
+earlier) routed nothing after it. The ten still held on trial lowered their offsets by 0.009 on average in 2.6
+hours (0.370 to 0.361): about 100 hours' worth to close the gap, where a trial leaves at most 17. A likely reason
+is in `PooledMLP._route`. Mixed before the gates (gate_after false), a newborn at gate 0.001 takes weight from the
+strong experts beside it, so the language-model gradient moves its row away from the characters it is lifted to.
+Its gate grows at the controller's rate (0.0010 to 0.0012-0.0015 in 3 hours). Untested lever:
+`growth.birth_gate_parents` (a newborn's gate as a share of its parents'), which gives its output a voice while
+the floor bounds its share. A same-checkpoint A/B with forced births is the way to decide.
+
+**E55 the balance term under Muon, in the run (2026-11-05, step 2,115,355, 419 experts, CPU).** `pool.balance`
+was 2e-5 by 11-05 (1e-5 from 10-23). The term reaches only the router's rows and is computed from a forward's
+first pass, whose input depends on the trunk alone, so its gradient was computed exactly on a copy of that
+checkpoint with no expert loaded: 6 windows of 2,048 characters per subject, weighted by the subjects' shares.
+The router's saved momentum (Muon's one moment) holds the rest.
+- The term is 2e-5 x 0.134 (E x sum(u x P) - 1, 0 when use is even; 0.03-0.29 across windows), ~3e-6 nats on
+  the training loss. Its gradient is 1.0e-5 (Frobenius), 0.12% of the router's momentum (8.5e-3).
+- On the 50 rows that no forward had admitted in the last 400 texts, the momentum is the term's gradient
+  (cosine 0.86) at 0.31 of its size. That is the clip: the run's gradient norm is ~3.3 against a clip of 1.0. A
+  weight of 1e-5 would give 0.15, so the run uses 2e-5. On rows in use the term is a median ~4% of the row's momentum.
+- Muon's step moves a row in use a median 0.031 of a full row, the same without the term; the term's part is
+  0.002. Rows not admitted move 0.001-0.002. At this step size (1.13e-5 per full row) the term raises an idle or
+  newborn expert's mean score ~0.0001 an hour, ~0.002 over a trial. That compares with a score spread of 0.53
+  across experts and the ~0.36 a newborn needed to reach the card (E54). The floor rule moves an offset 0.56 an
+  hour.
+- Carried on in a constant direction (an upper bound), the term's part of the step would change 0.44 of a
+  window's 32 card slots after a trial's worth of steps (17.4 h), 2.3 after a week and 6.4 after 30 days. The
+  whole step, under the same bound, changes 12.9 in 17.4 h.
+- Use is spread by the texts' votes instead. 307 of 419 experts hold a share of recent admissions above 1e-4.
+  Every one of the 409 experts present at both steps 2,076,178 and 2,115,355 was admitted between them. Router rows
+  moved a median 1.22% of their norm in those 14 hours, 0.97% of it weight decay.
+Verdict: at 1e-5 to 2e-5 under Muon the term barely touches the network, and doubling it doubled a negligible
+effect. Under AdamW each element's step was scaled by its own history, so a row with only this gradient moved
+at the full rate whatever the weight; E21's 0.01 took the experts in use from 59 to 114 in 15 minutes. Muon's
+five Newton-Schulz steps cannot lift directions this far below the strongest (E52). Turning it off should change
+nothing measurable. To matter it would need ~1,000x or more, which flattens every expert's use (E21, E35). The
+weight is the author's. The comments on it in config.yaml and `PagedPool.note_balance` still describe AdamW.

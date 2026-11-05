@@ -72,8 +72,9 @@ pool:
   # Three tiers: disk holds every expert, RAM caches the recently wanted,
   # VRAM holds what the current forward admitted. Only VRAM is scarce.
   resident: 32            # experts one forward may use - the card's slots, each
-                          # holding weights, gradient and Adam's moments
-  ram_cache: 288          # RAM - experts kept in system memory (~25 MB each)
+                          # holding weights, gradient and the optimiser's moments
+  ram_cache: 384          # RAM - experts kept in system memory (~19 MB each
+                          # under Muon, ~25 MB under AdamW)
 
   capacity_factor: 0      # most of a batch one expert may take, as a multiple
                           # of its fair share; the rest is dropped. 0 removes
@@ -93,7 +94,7 @@ pool:
   # row at the usual pace whatever the weight. 0 turns it off. In a 15-minute
   # test 0.01 took the experts in use on held-out from 59 to 114, at a cost of
   # 0.023 in held-out loss over those minutes.
-  balance: 1e-5
+  balance: 5e-5
 
   # THE TEMPERATURE OF EXPERT SELECTION - which experts compute a character,
   # NOT which character comes out. Characters are always chosen greedily; any
@@ -130,11 +131,22 @@ pool:
   # THE ROUTING BIAS - an offset per expert, added to the router's scores
   # where experts are chosen (the card's vote and every character's top 8)
   # and nowhere else: not to the weights the chosen are mixed with, and not
-  # to the loss. After every step each offset moves by route_bias, up or
-  # down, toward its rank's share of training choices on the curve
-  # 1 / (rank + route_bias_offset). Saved with the weights, so reading and
-  # chat choose as training does. 0 turns it off.
-  route_bias: 0
+  # to the loss. After every step offsets move by route_bias, up or down.
+  # Saved with the weights, so reading and chat choose as training does.
+  # route_bias 0 turns it off. Two rules:
+  #   route_floor above 0 - THE FLOOR: only an expert inside its trial, and
+  #     only upward. One taking less than route_floor of an even share of
+  #     training choices rises a step; one at or above it falls a step, to
+  #     no lower than 0; outside its trial an expert has no offset. A newborn
+  #     whose router row no text asks for is lifted until characters choose
+  #     it, and lets go as its own row earns the share; after its trial it
+  #     lives or dies by its own use. 0.1 is about the typical grown expert's
+  #     share (11-04). A lifted request also counts lifted in the card's vote.
+  #   route_floor 0 - the curve: every expert toward its rank's share of
+  #     training choices, 1 / (rank + route_bias_offset). It cost 0.31 of
+  #     held-out (E35), moving strong experts' characters onto weak ones.
+  route_bias: 2.0e-4
+  route_floor: 0.1
   route_bias_offset: 25
 
 training:
@@ -176,7 +188,7 @@ growth:
   #   EARNING  the experts added recently are being asked for
   #   FITS     not too many are already inside their trial
   #   HONEST   train and held-out have not separated
-  every_chars: 2_000_000  # characters between growth decisions
+  every_chars: 8_000_000  # bytes between growth decisions
   k: 1                    # experts added per decision
 
   max_gap: 0.4            # HONEST: train minus held-out. 0 disables
@@ -194,7 +206,8 @@ growth:
   keep_ratio_min: 0.35
   recent_mult: 4.0        # "still young" is age < this x the trial
 
-  # ROOM. An expert is 25.2 MB, so 10 GB is about 397 of them.
+  # ROOM. An expert is 18.9 MB under Muon, which keeps one moment (25.2 MB
+  # under AdamW, which keeps two), so 10 GB is about 529 of them (397).
   max_disk_gb: 10.0       # ceiling on the pool on disk. 0 for no limit
   mem_frac: 0.95          # refuse to grow past this share of the card
 
@@ -223,11 +236,11 @@ data:
   # A window never spans two subjects, but a subject may take several in a row.
   passage: 32768          # characters read from one file before moving on
 
-  # How the reading is shared between subjects. auto: each subject's share
-  # follows where reading still lowers held-out most, read off the run's own
-  # checks (minagi/lanes.py) - no subject below a quarter of an even share or
-  # above three times one, moving a few percent a check. equal: the even
-  # rotation every subject used to get, whatever its size.
+  # How the reading is shared between subjects, in characters. auto: each
+  # subject's share follows where reading still lowers held-out most, read off
+  # the run's own checks (minagi/lanes.py) - no subject below a quarter of an
+  # even share or above three times one, moving a few percent a check. equal:
+  # every subject an even share, whatever its size.
   lane_schedule: auto
   # Fixed weights pin the shares instead, e.g. {self-knowledge: 0.25}: each
   # above 0 and at most 1, unlisted subjects at 1.

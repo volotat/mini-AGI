@@ -885,6 +885,15 @@ def cmd_read(args):
               f"on each expert in proportion to that expert's share of recent "
               f"admissions (balance {pool.balance:g}), so the whole pool gets "
               f"used")
+    if getattr(pool, "route_bias", 0) > 0:
+        if getattr(pool, "route_floor", 0) > 0:
+            print(f"  an expert on trial that takes less than "
+                  f"{pool.route_floor:g} of an even share of choices is lifted "
+                  f"toward the characters, {pool.route_bias:g} a step, until "
+                  f"its own row earns it the share (route_floor)")
+        else:
+            print(f"  every expert's choices are steered toward its rank's "
+                  f"share, {pool.route_bias:g} a step (route_bias)")
 
     if args.no_pool_checkpoint:
         n_off = 0
@@ -904,6 +913,10 @@ def cmd_read(args):
                      kind=args.optimizer, fused=(device.type == "cuda"),
                      which=args.muon_params)
     print(f"  {muon.describe(opt)}")
+    if hasattr(pool, "keep_second_moment"):
+        # said now, before the start's held-out check reads experts into RAM:
+        # where Muon steps them, their files' second moments are never read
+        pool.keep_second_moment(muon.keeps_second(opt, pool.w1))
     snr = GradSNR()
     print(f"  trunk learns at {args.trunk_lr_mult:g}x the pool's rate "
           f"({sum(q.numel() for q in trunk)/1e6:.1f}M trunk, "
@@ -1129,12 +1142,19 @@ def cmd_read(args):
     fixed = _lane_weights(getattr(args, "lane_weights", ""),
                           [l.name for l in lanes])
     mode = "fixed" if fixed else getattr(args, "lane_schedule", "auto")
-    sizes = {l.name: sum(os.path.getsize(p) for p in l.paths
-                         if os.path.exists(p)) for l in lanes}
+    # what each lane holds, and what one visit to it reads: a passage, or a
+    # shorter file whole - which turns a saved share of visits into the share
+    # of characters it was (LaneSchedule.restore)
+    span = _visit_chunks(ctx_now, args.chunk, args.passage) * args.chunk
+    sizes, per_visit = {}, {}
+    for l in lanes:
+        got = [os.path.getsize(p) for p in l.paths if os.path.exists(p)]
+        sizes[l.name] = sum(got)
+        per_visit[l.name] = sum(min(g, span) for g in got) / max(len(got), 1)
     sched = LaneSchedule.restore(
         (man or {}).get("lanes"), [l.name for l in lanes], sizes,
         list(ev.groups) if ev is not None else [], mode=mode, weights=fixed,
-        total=float(man.get("read_chars", 0) or 0))
+        total=float(man.get("read_chars", 0) or 0), per_visit=per_visit)
     if parts is not None:
         # the level held-out is read at has just moved: fit again from the
         # log, which draws everything before on the new level
@@ -1325,6 +1345,9 @@ def cmd_read(args):
             r = lane.open(model, args.chunk, ctx_now, device,
                           turn * args.chunk)
             if r is None:
+                # nothing to read there: charged as a full visit, so the
+                # schedule moves on rather than picking it again
+                sched.missed(lane.name, turn * args.chunk)
                 continue
             path, data = r.name, r.data
             fl = []
@@ -2204,6 +2227,7 @@ def build_paged(wdir, device, resident=None, ram_capacity=256, ceiling=None,
         pool.route_bias = float(_get_cfg(_c, "pool.route_bias", 0.0) or 0.0)
         pool.route_bias_offset = float(
             _get_cfg(_c, "pool.route_bias_offset", 25.0) or 25.0)
+        pool.route_floor = float(_get_cfg(_c, "pool.route_floor", 0.0) or 0.0)
         pool.birth_gate_parents = float(
             _get_cfg(_c, "growth.birth_gate_parents", 0.0) or 0.0)
     except Exception:

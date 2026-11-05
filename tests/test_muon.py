@@ -12,16 +12,16 @@ What these tests hold it to:
   attention's query, key and value are stepped as the three matrices they are
   an expert on the card that no character chose is not stepped and keeps its
   momentum, while its weight decay applies; the experts beside it are stepped
-  Muon keeps its momentum where AdamW keeps its first moment, and leaves the
-  second as it was
+  Muon keeps its momentum where AdamW keeps its first moment, and keeps no
+  second (tests/test_muon_one_moment.py)
   on a real paged model every weight matrix is Muon's - the trunk's, the
   experts', the router's - and the embedding, the head, the norms, the
   halting unit, the gate and the depth embedding are AdamW's, the pool's
   AdamW group last; a router that growth replaces stays Muon's
   `adamw` builds the optimiser the run has always had
   train.py reads with it end to end - it steps, saves, loads again, and the
-  experts' files carry its momentum - and chat's learner builds the same
-  optimiser from the config
+  experts' files carry its momentum and no second moment - and chat's
+  learner builds the same optimiser from the config
 """
 import json
 import os
@@ -136,9 +136,8 @@ check("an expert on the card that no character chose is not stepped and "
       and all(float(moved[i]) > 1e-4 for i in (0, 1, 3))
       and not torch.equal(st["exp_avg"][0], m_before[0]),
       f"{[round(float(x), 6) for x in moved]}")
-check("Muon keeps its momentum in AdamW's first moment and leaves the second "
-      "as it was",
-      bool((st["exp_avg_sq"] == 7.0).all()))
+check("Muon keeps its momentum in AdamW's first moment and lets the second go",
+      "exp_avg_sq" not in st)
 
 # --- on a real paged model ------------------------------------------------------------
 tmp = tempfile.mkdtemp(prefix="minagi-muon-")
@@ -218,11 +217,12 @@ try:
         cwd=ROOT, capture_output=True, text=True, timeout=900)
     rows = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
     m2, _, pool2, man2 = T.build_paged(wdir, "cpu", read_only=True)
-    moms = []
+    moms, seconds = [], 0
     for f in sorted(os.listdir(os.path.join(wdir, "experts"))):
         z = np.load(os.path.join(wdir, "experts", f))
         if "w1_m" in z.files:
             moms.append(int(np.abs(z["w1_m"]).max()))
+        seconds += sum(k.endswith("_v") for k in z.files)
     check("train.py reads with it end to end: steps, saves, and loads again",
           r.returncode == 0 and "Muon for the weight matrices" in r.stdout
           and len(rows) >= 20 and all(x["model"] is not None for x in rows)
@@ -232,8 +232,9 @@ try:
           f"{sum(x['model'] is None for x in rows)} none, step {man2['step']}"
           + ("" if r.returncode == 0 else "\n" + r.stdout[-1500:]
              + r.stderr[-1500:]))
-    check("...and the experts' files carry its momentum",
-          sum(m > 0 for m in moms) >= 2, f"{moms}")
+    check("...and the experts' files carry its momentum, and no second moment",
+          sum(m > 0 for m in moms) >= 2 and seconds == 0,
+          f"{moms}, {seconds} second moments")
 
     from minagi.live import LiveLearner
     conf = {"training": {"lr": 1e-3, "trunk_lr_mult": 0.1, "chunk": 16,

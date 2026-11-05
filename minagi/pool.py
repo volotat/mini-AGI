@@ -295,6 +295,25 @@ class SharedPool(nn.Module):
                 "want_k": float(self.want_k)}
 
 
+def requests(scores, k, bias=None, lifted=False):
+    """
+    What a forward's characters ask the card for, one total per expert. Every
+    character asks for its top `k` experts by `scores` plus `bias` (the
+    routing bias, or None), and each request carries the router's probability
+    for that expert - the probability of the lifted scores when `lifted`, as
+    the floor rule has it (PagedPool.bias). The card admits the experts with
+    the largest totals.
+    """
+    q = F.softmax(scores, -1)
+    pick = scores if bias is None else scores + bias.to(scores.dtype)
+    top = torch.topk(pick, min(k, scores.shape[-1]), dim=-1).indices
+    if lifted:
+        q = F.softmax(pick, -1)
+    mass = torch.zeros(scores.shape[-1], device=q.device)
+    mass.index_add_(0, top.reshape(-1), q.gather(1, top).reshape(-1).float())
+    return mass
+
+
 class PooledMLP(nn.Module):
     """Routes into the shared pool. Nothing here names a domain."""
 
@@ -415,26 +434,20 @@ class PooledMLP(nn.Module):
                                  self.router.weight[:E]).float()
                     # the routing bias (pool.route_bias), where experts are
                     # chosen: which ones a character asks for. What each
-                    # request carries is still the router's own probability.
+                    # request carries is the router's own probability - or,
+                    # under the floor rule, the lifted one (PagedPool.bias).
                     sb = (p.selection_bias() if hasattr(p, "selection_bias")
                           else None)
-
-                    def requested(scores):
-                        q = F.softmax(scores, -1)
-                        if temp > 0:
-                            # every expert with its full probability: above
-                            # temperature 0 the card is drawn from the
-                            # text's whole distribution, row by row
-                            return q.float().sum(0)
-                        pick = (scores if sb is None
-                                else scores + sb[:E].to(scores.dtype))
-                        top = torch.topk(pick, min(self.top_k, E),
-                                         dim=-1).indices
-                        mass = torch.zeros(E, device=q.device)
-                        mass.index_add_(0, top.reshape(-1),
-                                        q.gather(1, top).reshape(-1).float())
-                        return mass
-                    mass = requested(z)
+                    lifted = (sb is not None and hasattr(p, "vote_lifted")
+                              and p.vote_lifted())
+                    if temp > 0:
+                        # every expert with its full probability: above
+                        # temperature 0 the card is drawn from the text's
+                        # whole distribution, row by row
+                        mass = F.softmax(z, -1).float().sum(0)
+                    else:
+                        mass = requests(z, self.top_k,
+                                        None if sb is None else sb[:E], lifted)
                 # THE BALANCE TERM (pool.balance), once per forward that
                 # trains: the router pays for the probability it puts on each
                 # expert in proportion to that expert's share of recent
@@ -799,8 +812,9 @@ class AutoGrow:
       says in one line which one refused:
 
         ROOM    the pool is under its disk ceiling and VRAM is not nearly
-                spent. An expert file is ~25 MB with its Adam moments, so the
-                disk ceiling is what decides how large the model may ever get.
+                spent. An expert file is ~19 MB with Muon's momentum (~25 MB
+                with AdamW's two moments), so the disk ceiling is what decides
+                how large the model may ever get.
 
         USED    the capacity already added is being asked for. Measured on
                 STALENESS, never on routing share: the load-balancing loss

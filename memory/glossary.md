@@ -41,7 +41,8 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
   It learns at x0.1 of the experts' rate (`training.trunk_lr_mult`, E9). The router rows, depth embeddings and gates
   belong to the pool and learn at its rate (`minagi/pool.py` `split_trunk_pool`).
 - **expert**: a SwiGLU MLP 512 -> 2048 -> 512 (w1, w3, w2; 3.15M parameters), one file
-  `weights/experts/eNNNNN.npz` with its own Adam moments in bf16, ~25 MB. Known by a stable id (`uid`), not a position.
+  `weights/experts/eNNNNN.npz` with its own optimiser moments in bf16: Muon's momentum, ~19 MB (AdamW's two, ~25 MB).
+  Known by a stable id (`uid`), not a position.
 - **pool**: every expert there is: 397 since 1,553.9M characters, the ceiling `growth.max_disk_gb` 10 sets.
   **site**: a layer that calls the pool (a PooledMLP); each site has its own router.
 - **router / router row**: per site, a linear map with one row per expert, scoring every expert for each character.
@@ -56,14 +57,21 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
   since position 0); the forward is admitted the vote's top 32, and characters route only among those.
 - **resident / slot / the card**: the 32 experts on the GPU at once (`pool.resident`), with gradient and moments.
   **loads**: experts copied onto the card.
-- **RAM tier** (`pool.ram_cache` 288): experts kept in system memory, moments in bf16. **hit rate**: the share of
+- **RAM tier** (`pool.ram_cache` 384, 288 until 11-03): experts kept in system memory, moments in bf16. **hit rate**: the share of
   loads served from RAM rather than disk. Disk holds every expert.
 - **paging / eviction / write-back / dirty**: moving experts disk -> RAM -> card and back. An expert leaving RAM is
   written back only if something trained it. Paging an expert in marks it dirty, so a tool that opens
   `weights/` without `read_only=True` writes expert files (conventions.md).
 - **balance term** (`pool.balance`): a Switch-style loss on the router's probabilities over the whole pool, each
   expert charged by its recent share of admissions (`recent`, an EMA over ~1,000 training forwards); only router rows
-  learn from it. It replaced the **exploration bonus** (2026-09-27 .. 10-02).
+  learn from it. It replaced the **exploration bonus** (2026-09-27 .. 10-02). Under Muon it barely moves
+  the router (E52, E55).
+- **routing bias / floor rule** (`pool.route_bias`, `pool.route_floor`): an offset per expert added to the router's
+  scores where experts are chosen (each character's requests, the card's vote, its top 8), never to the mixing
+  weights or the loss, stepped by `route_bias` after every optimiser step. The **curve** rule (route_floor 0)
+  steers every expert toward a rank curve and was rejected (E35, +0.31). The **floor** rule (route_floor > 0,
+  from 11-04) lifts only experts on trial whose share of training choices is below route_floor of an even share,
+  falls back to 0 as they earn it, and is 0 off trial; lifted requests count lifted in the vote.
 - **growth / newborn / birth**: every 2M characters (`growth.every_chars`) one expert (`growth.k`) is born if five
   brakes allow it: ROOM, USED, EARNING, FITS, HONEST (config.yaml `growth:`). A newborn is recombined from whole
   hidden units of several pool members.
@@ -88,9 +96,10 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
   characters (`data.passage`, 16 chunks), fewer when the file is shorter (a short file is read whole from its start).
   **window / context**: the 4,096 characters attention reaches back over (`context_now`); within a visit it moves a
   chunk at a time, and it is empty at each visit's start.
-- **share**: a lane's share of VISITS, set by `minagi/lanes.py`. worth = the sum over its subjects of |alpha| L / D,
-  shares within [1/4, 3] of an even share, moving at most 5% a check, visits by smooth weighted round-robin
-  (**credit**). Visits differ in length, so a lane's share of characters is not its share of visits (E47).
+- **share**: a lane's share of the CHARACTERS read, set by `minagi/lanes.py`. worth = the sum over its subjects of
+  |alpha| L / D, shares within [1/4, 3] of an even share, moving at most 5% a check, visits by smooth weighted
+  round-robin in characters (**credit**): a lane of long files is visited less often. Shares were of visits until
+  11-03 (E47).
 - **self-knowledge**: `data/train/self-knowledge`, the repository's own source and docs plus generated answers about
   the model (`tools/rebuild_self_knowledge.py`, `corpora/self_knowledge.yaml`); rebuilt by hand, with no run training.
 - **held-out**: `data/val`, never trained on. **eval**: `data/eval` (the PG19 test split; the next stage's ARC

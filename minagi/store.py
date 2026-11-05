@@ -36,6 +36,7 @@ import time
 import numpy as np
 import torch
 
+from .muon import second_moment
 from .precision import pack_bf16, unpack_bf16
 
 CORE, ROUTERS, EXPERTS, OPTIM = "core", "routers", "experts", "optim"
@@ -176,7 +177,8 @@ def save(model, path, step=None, val=None, opt=None, cfg=None, verbose=False,
 
 
 def _expert_moments(opt, model):
-    """Adam's two moments per expert, keyed by expert id."""
+    """The optimiser's moments per expert, keyed by expert id: AdamW's two,
+    Muon's one."""
     name_of = {id(p): n for n, p in model.named_parameters()}
     out = {}
     for group in opt.param_groups:
@@ -189,7 +191,8 @@ def _expert_moments(opt, model):
                 continue
             i, leaf = expert_index(n), expert_leaf(n)
             out.setdefault(i, {})[leaf + "_m"] = st["exp_avg"].cpu().numpy()
-            out[i][leaf + "_v"] = st["exp_avg_sq"].cpu().numpy()
+            if "exp_avg_sq" in st:
+                out[i][leaf + "_v"] = st["exp_avg_sq"].cpu().numpy()
     return out
 
 
@@ -289,7 +292,7 @@ def _savez(path, arrays):
 
 def _save_optim(opt, model, path):
     """
-    Adam moments for everything that is not an expert.
+    The optimiser's moments for everything that is not an expert.
 
     Expert moments live in the expert's own file, next to its weights, because
     that is where they belong - an expert is not fully described by its weights
@@ -308,7 +311,8 @@ def _save_optim(opt, model, path):
             # bf16: two thirds of this file is moments, and narrowing them
             # costs a thousandth of their magnitude. See minagi/precision.py.
             out[n + "|m"] = pack_bf16(st["exp_avg"].detach().cpu())
-            out[n + "|v"] = pack_bf16(st["exp_avg_sq"].detach().cpu())
+            if "exp_avg_sq" in st:
+                out[n + "|v"] = pack_bf16(st["exp_avg_sq"].detach().cpu())
             if st.get("step") is not None:
                 out[n + "|t"] = np.asarray(float(st["step"]))
     return _savez(os.path.join(path, "optim.npz"), out) if out else 0
@@ -372,15 +376,15 @@ def _load_optim(opt, model, path):
             if n is None or (n + "|m") not in z.files:
                 continue
             m = unpack_bf16(z[n + "|m"])
-            v = unpack_bf16(z[n + "|v"])
+            v = unpack_bf16(z[n + "|v"]) if (n + "|v") in z.files else None
             # a tensor that changed shape since the moments were written - the
             # embedding after a vocabulary extension, an expert after growth -
             # has to start with fresh moments rather than mismatched ones
-            if m.shape != p.shape or v.shape != p.shape:
+            if m.shape != p.shape or (v is not None and v.shape != p.shape):
                 continue
             st = opt.state[p]
             st["exp_avg"] = m.to(device=p.device, dtype=p.dtype)
-            st["exp_avg_sq"] = v.to(device=p.device, dtype=p.dtype)
+            _second(st, v, group, p)
             if (n + "|t") in z.files:
                 # fused AdamW requires the step counter on the same device as
                 # the parameter, not on the CPU where it was just loaded
@@ -403,12 +407,24 @@ def _load_expert_moments(opt, model, path):
             if z is None or (leaf + "_m") not in z.files:
                 continue
             m = unpack_bf16(z[leaf + "_m"])
-            v = unpack_bf16(z[leaf + "_v"])
+            v = unpack_bf16(z[leaf + "_v"]) if (leaf + "_v") in z.files else None
             if m.shape != p.shape:
                 continue
             st = opt.state[p]
             st["exp_avg"] = m.to(device=p.device, dtype=p.dtype)
-            st["exp_avg_sq"] = v.to(device=p.device, dtype=p.dtype)
+            _second(st, v, group, p)
+
+
+def _second(st, v, group, p):
+    """A restored tensor's second moment: none where Muon steps it, which
+    keeps only a momentum; the saved one where AdamW does - or, saved while
+    Muon stepped it, one started from its momentum (minagi/muon.py)."""
+    if group.get("muon"):
+        st.pop("exp_avg_sq", None)
+    elif v is not None:
+        st["exp_avg_sq"] = v.to(device=p.device, dtype=p.dtype)
+    else:
+        st["exp_avg_sq"] = second_moment(st["exp_avg"])
 
 
 def summarise(path):

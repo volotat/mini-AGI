@@ -19,6 +19,16 @@ What these tests hold it to:
   1 / (rank + offset): an expert taking more than that comes down, one taking
   less goes up, centred so they do not drift together, within the clamp;
   with the setting off it only clears the step's counts
+  under the floor rule (pool.route_floor) only an expert inside its trial
+  is lifted: below the floor it rises a step, at or above it it lets go a
+  step at a time but never goes below 0, within the clamp; when its trial
+  ends, or while no trial is set, it has no offset - and an old expert's
+  leftover offset is cleared; learning outside training reads the same
+  trial, in the run's steps
+  a forward's requests carry the router's own probability, or under the
+  floor rule the lifted one, so an expert the router barely wants can win
+  the card's vote once it is lifted - and the forward reads which rule is
+  in force from the pool
   the offsets and the shares they steer by are saved with the weights, and a
   newborn starts with none
   a newborn's gate is a share of its parents' gates under
@@ -58,7 +68,8 @@ try:
     alt = os.path.join(tmp, "alt.yaml")
     with open(alt, "w") as f:
         f.write("pool:\n  gate_after: scaled\n  route_bias: 2.0e-4\n"
-                "  route_bias_offset: 10\ngrowth:\n  birth_gate_parents: 0.1\n")
+                "  route_bias_offset: 10\n  route_floor: 0.3\n"
+                "growth:\n  birth_gate_parents: 0.1\n")
     os.environ["MINAGI_CONFIG"] = alt
     got = C.load()
     os.environ.pop("MINAGI_CONFIG")
@@ -75,8 +86,10 @@ try:
     os.environ.pop("MINAGI_CONFIG")
     check("build_paged reads the switches from the config",
           pool.gate_after == "scaled" and pool.route_bias == 2e-4
-          and pool.route_bias_offset == 10 and pool.birth_gate_parents == 0.1)
+          and pool.route_bias_offset == 10 and pool.birth_gate_parents == 0.1
+          and pool.route_floor == 0.3)
     pool.gate_after, pool.route_bias, pool.birth_gate_parents = False, 0.0, 0.0
+    pool.route_floor = 0.0
     model.eval()
     TEXT = ("add 2856 + 741 = 3597\nadd 12 + 30 = 42\nmul 7 * 6 = 42\n"
             "the cat sat on the mat and the dog sat on the log\n")
@@ -184,6 +197,91 @@ try:
     check("...and with the setting off it only clears the step's counts",
           float(pool.bias.abs().sum()) == 0.0
           and float(pool._step_hits.sum()) == 0.0)
+
+    # --- the floor ----------------------------------------------------------------
+    def steer(starved=None):
+        """One step in which every expert takes an even share of the choices,
+        but `starved` takes none."""
+        pool._step_hits[:n] = 10.0
+        if starved is not None:
+            pool._step_hits[starved] = 0.0
+        pool._steer_bias()
+
+    pool.route_bias, pool.route_floor = 1e-3, 0.1
+    pool.chosen_steps = 1.0                    # each step is the whole share
+    pool.trial, pool.now = 100, 1000
+    pool.born[:n] = 0.0
+    pool.born[:3] = 950.0                      # three experts on trial
+    pool.bias.zero_()
+    pool.bias[5] = 0.7                         # an old expert's leftover offset
+    steer(starved=0)
+    check("under the floor rule an expert on trial below the floor rises a "
+          "step, one on trial at an even share stays at 0, and an old expert "
+          "has no offset - its leftover is cleared",
+          abs(float(pool.bias[0]) - 1e-3) < 1e-9
+          and float(pool.bias[1:n].abs().sum()) == 0.0)
+    steer(starved=0)
+    steer()
+    check("...it lets go a step at a time once its own row earns the share",
+          abs(float(pool.bias[0]) - 1e-3) < 1e-9)
+    steer()
+    steer()
+    check("...but never below 0", float(pool.bias[0]) == 0.0)
+    pool.bias[0] = 3.9995
+    steer(starved=0)
+    check("...within the clamp", abs(float(pool.bias[0]) - 4.0) < 1e-6)
+    pool.now = 1100                            # 150 steps old: its trial is over
+    steer(starved=0)
+    check("...when its trial ends it has no offset, whatever it took",
+          float(pool.bias[:n].abs().sum()) == 0.0)
+    pool.trial, pool.now = 0, 960
+    steer(starved=0)
+    check("...and while no trial is set nothing is lifted",
+          float(pool.bias[:n].abs().sum()) == 0.0)
+
+    # --- what the card's vote counts ----------------------------------------------
+    from minagi.pool import requests                     # noqa: E402
+    sc = torch.zeros(64, 6)
+    sc[:, 5] = -20.0                           # an expert the router barely wants
+    sc[:, 0] = 2.0
+    lift = torch.zeros(6)
+    lift[5] = 30.0
+    own = requests(sc, 2, lift)
+    lifted_mass = requests(sc, 2, lift, lifted=True)
+    plain = requests(sc, 2)
+    check("a forward's requests carry the router's own probability: lifted into "
+          "every character's top 2, the barely-wanted expert still brings "
+          "almost nothing to the vote",
+          float(plain[5]) == 0.0 and float(own[5]) < 1e-6
+          and int(own.argmax()) == 0)
+    check("...and the lifted probability under the floor rule, so once lifted "
+          "it can win the card's vote",
+          int(lifted_mass.argmax()) == 5 and float(lifted_mass[5]) > 60.0)
+    pool.route_bias, pool.route_floor = 1e-3, 0.1
+    rules = (pool.vote_lifted(), )
+    pool.route_floor = 0.0
+    rules += (pool.vote_lifted(), )
+    pool.route_bias = 0.0
+    pool.route_floor = 0.1
+    rules += (pool.vote_lifted(), )
+    pool.route_floor = 0.0
+    route_src = inspect.getsource(PooledMLP._route)
+    check("...the forward reads which rule is in force from the pool: lifted "
+          "only under the floor rule with the bias on",
+          rules == (True, False, False) and "vote_lifted()" in route_src
+          and "requests(z" in route_src)
+    pool.bias.zero_()
+    pool.chosen_steps = 50.0
+    from minagi.live import LiveLearner                  # noqa: E402
+    pool.trial = 0
+    LiveLearner._for_run(model, 3e-4, man,
+                         {"prune": {"survival_chars": 12_800},
+                          "training": {"chunk": 128}}, None, 128, None, 8)
+    check("learning outside training - chat, the benchmarks - reads a "
+          "newborn's trial too, in the run's steps, so the floor rule does not "
+          "take every lift away there",
+          pool.trial == 100, f"trial {pool.trial}")
+    pool.trial = 0
 
     # --- saved with the weights; growth; a newborn's gate ------------------------
     pool.bias[:n] = torch.linspace(-1, 1, n)

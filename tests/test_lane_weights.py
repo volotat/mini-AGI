@@ -8,7 +8,8 @@ What these tests hold it to:
   "subject=weight,..." and a mapping read alike; unlisted subjects weigh 1
   a name that is not a subject, a weight outside (0, 1] and a pair that is
   not subject=weight stop the run before it reads, saying which
-  fixed weights become the shares, and the shares never move
+  fixed weights become the shares, the shares never move, and what is read
+  follows them in characters
 """
 import os
 import sys
@@ -65,10 +66,17 @@ check("fixed weights become the shares - unlisted subjects at 1",
 s.observe(1e8, {"chat": 0.5, "wikipedia": 0.9})
 check("...and they never move", s.step() == "" and not s.fits
       and abs(s.shares["arithmetic"] - 0.5 / 2.75) < 1e-12)
-picks = [s.pick() for _ in range(275)]
-check("...and visits follow them",
-      picks.count("self-knowledge") == 25 and picks.count("chat") == 100,
-      {n: picks.count(n) for n in NAMES})
+holds = {"arithmetic": 32768, "chat": 16827, "self-knowledge": 13794,
+         "wikipedia": 5324}                 # what a visit to each reads
+got = {n: 0 for n in NAMES}
+for _ in range(2000):
+    k = s.pick()
+    s.note_read(k, holds[k])
+    got[k] += holds[k]
+tot = sum(got.values())
+check("...and what is read follows them, in characters",
+      all(abs(got[n] / tot - s.shares[n]) < 0.005 for n in NAMES),
+      {n: f"{got[n] / tot:.3f}/{s.shares[n]:.3f}" for n in NAMES})
 
 print("\n  all lane-weight tests pass" if ok else "\n  FAILURES")
 sys.exit(0 if ok else 1)

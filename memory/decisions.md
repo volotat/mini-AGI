@@ -77,11 +77,16 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
 - REVERSED: the exploration bonus (09-27; beta 0.35, then 0.65 by the author), replaced on 10-02
   by the balance term (E21) because reading and chat chose differently under a training-only
   bias. Use resets the prune clock.
-- SETTLED: `pool.balance` is the author's: 0.003 committed, then lowered by hand in steps to 1e-5 by 10-23
-  (timeline.md has each value; uncommitted in config.yaml; YAML reads `1e-5` as a string, train.py converts
-  it with float()).
+- SETTLED: `pool.balance` is the author's: 0.003 committed, then lowered by hand in steps to 1e-5 by 10-23,
+  raised to 2e-5 by 11-05 (timeline.md has each value; uncommitted in config.yaml; YAML reads `1e-5` as a
+  string, train.py converts it with float()). Under Muon, the router's optimizer since 10-27, it barely moves
+  the router at these weights (E52, E55).
 - SETTLED: `pool.capacity_factor: 0` (no dispatch cap), the author's (E28; uncommitted in config.yaml).
 - REJECTED: DeepSeek-style per-expert routing offsets / `pool.route_bias` (E21 at 0.001 0.7019; E35 +0.31).
+  ADOPTED (11-04, the author's go-ahead; from the next start): the same offsets under the FLOOR rule
+  (`pool.route_floor` 0.1, `route_bias` 2e-4) - only experts on trial, only upward, 0 off trial, lifted requests
+  counted lifted in the card's vote - because no newborn was admitted under Muon (E52). The router stays on Muon
+  (one optimizer family; the author dislikes mixing more). The curve rule stays rejected.
   The author was ready to switch it back on proof that it is much better; it was far worse. Usage
   follows usefulness and cannot be imposed.
 - REJECTED: mixing after gates (`pool.gate_after`, plain and scaled, E35). REJECTED before testing: log
@@ -110,8 +115,8 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
 - SETTLED: a file is one document, a subject is a top-level folder.
 - SETTLED: reading shares are automatic (10-18; the author wanted them to set themselves, with no flag to
   turn on): worth = sum(|alpha| L)/D per lane, shares in [1/4, 3] of even, <= 5% a check. `--lane-schedule equal` and
-  `--lane-weights` exist as overrides. OPEN: the shares are of visits, not of characters, so the characters
-  each lane gets do not follow its worth (E47; not changed, the author's call).
+  `--lane-weights` exist as overrides. The shares are of characters (11-03, the author's call; they had been
+  of visits, so the characters each lane got did not follow its worth, E47).
 - SETTLED: arithmetic in standard notation, scratchpads that derive every step (09-20): a scratchpad holds
   the working that leads to the answer, not an asserted result. Its floor (E39) keeps it at the 1/32 share.
 - SETTLED: self-knowledge is a lane holding the model's own source and docs, without README

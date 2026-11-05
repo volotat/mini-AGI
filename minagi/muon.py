@@ -30,8 +30,13 @@ ITS MOMENT IS ADAMW'S FIRST. Muon keeps one moment, a momentum, and keeps it
 where AdamW keeps its first moment - exp_avg - so the experts' files carry
 it with them as they carry AdamW's (minagi/paged.py), checkpoints save it as
 they save AdamW's (minagi/store.py), and a run that moves from AdamW starts
-from the momentum AdamW had built rather than from zero. exp_avg_sq is kept
-and left as it was, so a run that moves back finds AdamW's second moment.
+from the momentum AdamW had built rather than from zero. It keeps no second
+moment: a matrix Muon steps carries none on the card, in RAM or in its
+file, where AdamW's would be a quarter of an expert's bytes, and one restored
+from an AdamW checkpoint is let go at its first step. A run that moves back
+to AdamW starts each such matrix's second moment from its momentum squared
+(second_moment), which holds its first steps to about the rate until AdamW's
+own average - beta2 0.95, about twenty steps - takes over.
 
 AN EXPERT ON THE CARD THAT NO CHARACTER CHOSE has no gradient. AdamW steps
 it anyway, by a momentum that fades. Muon's step has the same size whatever
@@ -65,6 +70,24 @@ def orthogonalise(G, steps=5, eps=1e-7):
     return X.mT if tall else X
 
 
+def second_moment(m):
+    """The second moment AdamW starts from for a tensor that has none - one
+    Muon stepped, which kept only a momentum: the momentum squared. Zeros for
+    a tensor with no history; otherwise a denominator that holds each
+    coordinate's step to about the rate, where zeros would let a small
+    gradient beside an old momentum take a step of any size."""
+    return m * m
+
+
+def keeps_second(opt, p):
+    """Whether `opt` keeps AdamW's second moment for parameter p: AdamW
+    does, Muon does not."""
+    if not isinstance(opt, MuonAdamW):
+        return True
+    return not any(g["muon"] for g in opt.param_groups
+                   if any(q is p for q in g["params"]))
+
+
 def takes_muon(name, p, which="all", pool_ids=()):
     """Whether Muon steps this parameter: a weight matrix - two dimensions,
     or a stack of the experts' - that is not the embedding, the head or the
@@ -91,11 +114,14 @@ class MuonAdamW(torch.optim.Optimizer):
                                       momentum=momentum, nesterov=nesterov,
                                       ns_steps=ns_steps))
 
-    def _state(self, p):
+    def _state(self, p, second=True):
         st = self.state[p]
         if "exp_avg" not in st:
             st["exp_avg"] = torch.zeros_like(p)
-            st["exp_avg_sq"] = torch.zeros_like(p)
+        if not second:
+            st.pop("exp_avg_sq", None)
+        elif "exp_avg_sq" not in st:
+            st["exp_avg_sq"] = second_moment(st["exp_avg"])
         # counted on the host: a counter on the card would make every
         # parameter's step wait for the one before it
         st["step"] = torch.tensor(float(st.get("step", 0.0)) + 1.0)
@@ -134,7 +160,7 @@ class MuonAdamW(torch.optim.Optimizer):
         for p in g["params"]:
             if p.grad is None:
                 continue
-            st = self._state(p)
+            st = self._state(p, second=False)
             P, grad, buf = p, p.grad, st["exp_avg"]
             p.mul_(1.0 - lr * wd)
             if k > 1:

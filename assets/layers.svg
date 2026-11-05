@@ -121,7 +121,7 @@
 <rect x="837.0" y="435" width="11" height="11" rx="2" fill="#5b8fb3" stroke="#5b8fb3" stroke-width="1"/>
 <rect x="852.0" y="435" width="11" height="11" rx="2" fill="white" stroke="#5b8fb3" stroke-width="1"/>
 <rect x="867.0" y="435" width="11" height="11" rx="2" fill="#5b8fb3" stroke="#5b8fb3" stroke-width="1"/>
-<text x="790.0" y="466.0" font-family="'Times New Roman', Times, 'Liberation Serif', Tinos, 'TeX Gyre Termes', 'Nimbus Roman', serif" font-size="13.5" fill="#555555" text-anchor="middle" font-style="italic">top 8 of 397 experts</text>
+<text x="790.0" y="466.0" font-family="'Times New Roman', Times, 'Liberation Serif', Tinos, 'TeX Gyre Termes', 'Nimbus Roman', serif" font-size="13.5" fill="#555555" text-anchor="middle" font-style="italic">top 8 of 423 experts</text>
 <text x="790.0" y="483.0" font-family="'Times New Roman', Times, 'Liberation Serif', Tinos, 'TeX Gyre Termes', 'Nimbus Roman', serif" font-size="13.5" fill="#555555" text-anchor="middle" font-style="italic">each a SwiGLU 512→2048→512</text>
 <path d="M 790.0 520.0 L 790.0 504.0" fill="none" stroke="#111111" stroke-width="2.0" stroke-linejoin="round"/>
 <polygon points="790.0,494.0 794.3,503.0 785.7,503.0" fill="#111111"/>

@@ -352,17 +352,26 @@ class LiveLearner:
     def _for_run(cls, model, base, man, c, weights_dir, chunk, context,
                  save_every):
         from .config import get
-        return cls(model, lr=base,
-                   aux_weight=float(getattr(getattr(model, "cfg", None),
-                                            "pool_aux", 0.0) or 0.0),
-                   trunk_lr_mult=get(c, "training.trunk_lr_mult", 0.1),
-                   wd=get(c, "training.weight_decay", 0.1),
-                   clip=get(c, "training.clip", 1.0),
-                   chunk=chunk or get(c, "training.chunk", 2048),
-                   context=context, save_every=save_every,
-                   weights_dir=weights_dir, manifest=man,
-                   optimizer=str(get(c, "training.optimizer", "adamw")),
-                   muon_params=str(get(c, "training.muon_params", "all")))
+        learner = cls(model, lr=base,
+                      aux_weight=float(getattr(getattr(model, "cfg", None),
+                                               "pool_aux", 0.0) or 0.0),
+                      trunk_lr_mult=get(c, "training.trunk_lr_mult", 0.1),
+                      wd=get(c, "training.weight_decay", 0.1),
+                      clip=get(c, "training.clip", 1.0),
+                      chunk=chunk or get(c, "training.chunk", 2048),
+                      context=context, save_every=save_every,
+                      weights_dir=weights_dir, manifest=man,
+                      optimizer=str(get(c, "training.optimizer", "adamw")),
+                      muon_params=str(get(c, "training.muon_params", "all")))
+        # a newborn's trial, in the steps the run counts, as train.py sets it:
+        # the routing bias's floor rule reads it after every step taken here
+        # too, and without it would take every newborn's lift away
+        pool = getattr(model, "pool", None)
+        if pool is not None and hasattr(pool, "trial") and not pool.trial:
+            surv = float(get(c, "prune.survival_chars", 0) or 0)
+            run_chunk = max(1, int(get(c, "training.chunk", 2048) or 2048))
+            pool.trial = max(1, int(round(surv / run_chunk))) if surv else 0
+        return learner
 
 
 def exchange_text(user_text, bot_text, u0="<user>", u1="</user>",

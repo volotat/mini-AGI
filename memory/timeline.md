@@ -61,8 +61,8 @@ lists every session with its time, step, characters and experts.
 
 The author's `pool.balance`, lowered by hand after the balance term came in at 0.003, as the working copy showed
 it: 0.001 later on 10-02, 2.5e-4 by 10-07, 6.5e-5 by 10-09, 3.5e-5 by 10-17, 1.5e-5 by 10-21, 1e-5 by 10-23
-(unchanged on 10-31). The run logs none of these values, so which session ran with which is known only to these
-bounds.
+(unchanged on 10-31), 2e-5 by 11-05 (the router's momentum shows the run uses it, E55). The run logs none of
+these values, so which session ran with which is known only to these bounds.
 
 Not dated here: rebuilds of the self-knowledge lane other than 10-08 (made by hand, with no run training), and the
 benchmark sweeps (on copies; they change nothing in the run).

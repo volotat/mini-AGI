@@ -44,9 +44,16 @@ is forgotten and interleaving is what keeps it; none above three times an
 even share. Shares move at most STEP a check, so a change is spread over
 hours and the held-out the rate controller steers by is never jolted.
 
-A visit is chosen by smooth weighted round-robin: each subject gains its
-share in credit at every visit, the one with the most credit is read and
-pays one back. The proportions are exact, and no subject waits long.
+THE SHARES ARE OF CHARACTERS, as the rule values characters. A visit is one
+file's passage - a short file read whole - so a visit to chess or
+arithmetic holds about six times the characters of one to wikipedia. Visits
+are chosen by smooth weighted round-robin in characters: whatever a visit
+reads, every subject gains its share of those characters in credit and the
+subject read pays them back, and the next visit goes to the subject with the
+most credit. A subject of long files is visited less often and reads as much,
+the proportions are exact, and no subject waits long. A visit that reads
+nothing - every file it tried had gone - is charged as a full one, so the
+reader moves on.
 """
 import math
 
@@ -217,16 +224,28 @@ class LaneSchedule:
 
     # --------------------------------------------------------------- reading
     def pick(self):
-        """The subject to read next."""
-        for k in self.names:
-            self.credit[k] += self.shares[k]
-        k = max(self.names, key=lambda n: self.credit[n])
-        self.credit[k] -= 1.0
-        return k
+        """The subject to read next: the one with the most credit."""
+        return max(self.names, key=lambda n: self.credit[n])
 
     def note_read(self, lane, chars):
+        """A visit to `lane` read `chars` characters."""
         if lane in self.read:
             self.read[lane] += float(chars)
+            self._pay(lane, chars)
+
+    def missed(self, lane, chars):
+        """A visit to `lane` read nothing: it is charged as `chars`, a full
+        visit, and nothing is counted as read."""
+        if lane in self.read:
+            self._pay(lane, chars)
+
+    def _pay(self, lane, chars):
+        """Every subject gains its share of `chars` in credit; `lane`, which
+        read them, pays them back. The credits keep their sum."""
+        c = float(chars)
+        for k in self.names:
+            self.credit[k] += self.shares[k] * c
+        self.credit[lane] -= c
 
     # ----------------------------------------------------------- start, save
     def describe(self):
@@ -252,18 +271,24 @@ class LaneSchedule:
         self.read = keep
 
     def state(self):
-        return {"mode": self.mode, "shares": dict(self.shares),
+        return {"mode": self.mode, "unit": "characters",
+                "shares": dict(self.shares),
                 "read": dict(self.read), "fits": {k: list(v) for k, v
                                                   in self.fits.items()},
                 "last": self.last, "credit": dict(self.credit)}
 
     @classmethod
     def restore(cls, d, lanes, sizes, subjects=(), mode="auto", weights=None,
-                total=0.0):
+                total=0.0, per_visit=None):
         """A schedule for these lanes, carrying on from saved state `d` when
         there is one and it was the same mode. A lane the state does not know
         - the corpus grew one - starts at an even share and an even part of
-        what has been read."""
+        what has been read.
+
+        A state saved while the shares counted visits carries on as the
+        characters those visits read: each share times what one visit to its
+        lane reads, `per_visit`, so the reading does not jump. Its credits
+        counted visits too, and start again from zero."""
         s = cls(lanes, sizes, subjects, mode, weights)
         n = max(len(s.names), 1)
         for k in s.names:
@@ -272,6 +297,11 @@ class LaneSchedule:
             return s
         old = {k: float(v) for k, v in d.get("shares", {}).items()
                if k in s.names}
+        credit = d.get("credit", {})
+        if d.get("unit") != "characters":
+            credit = {}
+            if mode == "auto":
+                old = _in_characters(old, per_visit)
         new = [k for k in s.names if k not in old]
         kept = sum(old.values())
         room = 1.0 - len(new) / n
@@ -281,6 +311,19 @@ class LaneSchedule:
                        if k in s.read})
         s.fits = {k: [float(x) for x in v] for k, v in d.get("fits", {}).items()}
         s.last = d.get("last")
-        s.credit.update({k: float(v) for k, v in d.get("credit", {}).items()
+        s.credit.update({k: float(v) for k, v in credit.items()
                          if k in s.credit})
         return s
+
+
+def _in_characters(shares, per_visit):
+    """Shares of visits as the shares of the characters they read: each
+    times what one visit to its lane reads. A lane with no figure is taken
+    at the typical one."""
+    known = [v for k, v in (per_visit or {}).items() if k in shares and v > 0]
+    if not known:
+        return shares
+    typical = sum(known) / len(known)
+    w = {k: v * ((per_visit or {}).get(k) or typical) for k, v in shares.items()}
+    tot = sum(w.values())
+    return {k: v / tot for k, v in w.items()} if tot > 0 else shares

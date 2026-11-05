@@ -17,9 +17,13 @@ What these tests hold it to:
   it has been read
   no share leaves [1/4, 3] of an even share, and shares sum to one
   a share moves at most 5% at a check
-  visits follow the shares exactly, and no subject waits long
-  the state saves and restores; a lane the corpus gained starts even; equal
-  mode never moves
+  the shares are of characters: what each subject reads follows its share
+  exactly however much a visit to it holds, so a subject of short files is
+  visited more often, and no subject waits long; a visit that reads nothing
+  is charged as a full one, so the reader moves on
+  the state saves and restores; a state whose shares counted visits carries
+  on as the characters they read; a lane the corpus gained starts even;
+  equal mode never moves
   seeding from the sample log is the same as having watched those checks
 """
 import math
@@ -142,25 +146,91 @@ t = s.targets()
 check("...and reaches the targets in time",
       all(abs(s.shares[k] - t[k]) < 0.005 for k in LANES))
 
-# visits
-picks = [s.pick() for _ in range(5000)]
-counts = {k: picks.count(k) for k in LANES}
+# reading: a visit is one file's passage, and what it holds differs by
+# subject - a chess or arithmetic file fills the whole passage, a wikipedia
+# article a sixth of it
+HOLDS = {"arithmetic": 32768, "chat": 16827, "chess": 32754,
+         "self-knowledge": 13794, "wikipedia": 5324}
+
+
+def visits(sched, n, holds=HOLDS):
+    """n visits as the reader makes them: pick, read, say how much."""
+    out = []
+    for _ in range(n):
+        k = sched.pick()
+        sched.note_read(k, holds[k])
+        out.append(k)
+    return out
+
+
+before = dict(s.read)
+picks = visits(s, 5000)
+got = {k: s.read[k] - before[k] for k in LANES}
+tot = sum(got.values())
 gap = {}
 for k in LANES:
-    at = [i for i, p in enumerate(picks) if p == k]
-    gap[k] = max(b - a for a, b in zip(at, at[1:]))
-check("visits follow the shares exactly",
-      all(abs(counts[k] / 5000 - s.shares[k]) < 0.002 for k in LANES),
-      counts)
+    at = [0] + [i for i, p in enumerate(picks) if p == k]
+    # characters read elsewhere between two visits to k
+    gap[k] = max(sum(HOLDS[q] for q in picks[a + 1:b] if q != k)
+                 for a, b in zip(at, at[1:]))
+check("characters follow the shares exactly, however much a visit to each "
+      "subject holds",
+      all(abs(got[k] / tot - s.shares[k]) < 0.002 for k in LANES),
+      {k: f"{got[k] / tot:.3f}/{s.shares[k]:.3f}" for k in LANES})
+two = LaneSchedule(["chess", "wikipedia"], SIZES, [], mode="fixed",
+                   weights={"chess": 1.0, "wikipedia": 1.0})
+p2 = visits(two, 700)
+ratio = p2.count("wikipedia") / max(p2.count("chess"), 1)
+check("...so at equal shares a subject of short files is visited as many "
+      "times more often as its visits are shorter",
+      abs(ratio - HOLDS["chess"] / HOLDS["wikipedia"]) < 0.3,
+      f"{ratio:.2f} visits to wikipedia for each to chess")
+# paying back its own visit and outwaiting the longest one: (own + longest)
+# characters of credit, earned at its share of whatever is read elsewhere
 check("...and no subject waits much longer than its share says",
-      all(gap[k] <= 1.5 / s.shares[k] + 2 for k in LANES), gap)
+      all(gap[k] <= (HOLDS[k] + max(HOLDS.values())) / s.shares[k]
+          for k in LANES),
+      {k: f"{gap[k]:,}" for k in LANES})
+missed = getattr(s, "missed", None)
+gone = LaneSchedule(LANES, SIZES, SUBJECTS)
+first, seq = gone.pick(), []
+for _ in range(20 if missed is not None else 0):
+    k = gone.pick()
+    seq.append(k)
+    if k == first:
+        gone.missed(k, 32768)            # every file it tried had gone
+    else:
+        gone.note_read(k, HOLDS[k])
+check("a visit that reads nothing is charged as a full one: the reader moves "
+      "on, and nothing is counted as read",
+      missed is not None and 1 <= seq.count(first) <= 3
+      and gone.read[first] == 0.0, f"{seq.count(first)} of {len(seq)} visits")
 
 # save and restore
 st = s.state()
 r = LaneSchedule.restore(st, LANES, SIZES, SUBJECTS, total=0)
 check("the state restores: shares, what was read, the fits",
       r.shares == s.shares and r.read == s.read and r.fits == s.fits
-      and [r.pick() for _ in range(50)] == [s.pick() for _ in range(50)])
+      and st.get("unit") == "characters"
+      and visits(r, 50) == visits(s, 50))
+old = {"mode": "auto", "shares": dict(s.shares), "read": dict(s.read),
+       "fits": st["fits"], "last": st["last"],
+       "credit": {k: 3.0 for k in LANES}}  # a state that counted visits
+try:
+    conv = LaneSchedule.restore(old, LANES, SIZES, SUBJECTS, total=0,
+                                per_visit=HOLDS)
+except TypeError as e:
+    conv = None
+    print(f"  (restore refused per_visit: {e})")
+mix = {k: s.shares[k] * HOLDS[k] for k in LANES}
+mix = {k: v / sum(mix.values()) for k, v in mix.items()}
+check("a state whose shares counted visits carries on as the characters "
+      "those visits read, so the reading does not jump",
+      conv is not None
+      and all(abs(conv.shares[k] - mix[k]) < 1e-9 for k in LANES)
+      and all(v == 0.0 for v in conv.credit.values()),
+      "" if conv is None else
+      {k: f"{conv.shares[k]:.3f}" for k in LANES})
 grown = LaneSchedule.restore(st, LANES + ["poetry"], dict(SIZES, poetry=1e8),
                              SUBJECTS, total=2.3e9)
 check("...and a lane the corpus gained starts at an even share",

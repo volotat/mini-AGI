@@ -11,12 +11,13 @@ state.md, describe the model as it runs. Superseded below:
   98,304 at top-16. Growth by five brakes (config.yaml `growth:`), births at a small gate recombined from
   parents' hidden units; pruning by staleness since last admission, never by the gate.
 - Selection: the text's vote admits each forward's 32; the exploration bonus under "Three tiers"
-  was replaced by the balance term.
+  was replaced by the balance term. From 11-04 (next start) the routing bias's floor rule lifts newborns on
+  trial into the vote (`pool.route_floor`, E52).
 - Context: grows one character at a time while the far end pays, not `ramp_context`; the cache
   costs ~52 KB a character (experiments.md E15b).
 - Choosing a character: greedy with the adaptation trace (adaptation.md, `decoding.adapt_*`);
   `rep_penalty` 1.0 (off), no n-gram block. `contrastive_generate` exists; no commit measures it.
-- Storage: a RAM tier of 288 experts with bf16 moments; routers.npz holds the gate and one router row per
+- Storage: a RAM tier of 384 experts (288 until 11-03) with bf16 moments - the momentum alone under Muon; routers.npz holds the gate and one router row per
   expert per site; core.npz includes the adapter.
 - "Numbers are from the current weights" no longer holds: they are from early September.
 

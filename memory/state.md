@@ -32,23 +32,36 @@ auto regions). timeline.md has the run's history session by session.
   every 100,000 chars, while the far end of the window still gains >= 0.015 (asked every 65,536 chars). Chunk
   2,048; passage 32,768.
 - Pool: experts SwiGLU 512 -> 2048 -> 512 (3.15M parameters each), top_k 8, resident 32 on the card, RAM tier
-  288, capacity_factor 0, balance 1e-5, select_temperature 0, gate_after false, route_bias 0. A fresh model
+  384 from 11-03 (288 before; one moment per expert makes 384 the same RAM), capacity_factor 0, balance 2e-5 (1e-5 until 11-05; under Muon it barely moves the router, E55), select_temperature 0, gate_after false, route_bias 2e-4 with route_floor 0.1 (the floor rule, since the restart at step 2,075,068 on 11-04). A fresh model
   starts with 64 experts; 31 of the originals remain and carry ~54% of routing. 331 experts carry weight and 66
   are gated to rest (`python3 -m minagi.store weights`, 10-29).
-- Growth every 2M chars (k 1, birth_gate 0.001), max_disk_gb 10 (the ceiling: 397 experts since ~1,538M);
+- Growth every 8M chars (k 1, birth_gate 0.001), max_disk_gb 10 (the ceiling: 397 experts since ~1,538M while
+  an expert carried AdamW's two moments, 25.2 MB; with Muon's one it is 18.9 MB and the ceiling ~529);
   prune survival 100M chars, dying_at 0.65.
+- Newborns are not chosen (E52, 11-04): every expert born since births resumed on 11-03 (22 by step 2,045,378)
+  was admitted to no forward and routed no characters, and those past their trial were pruned unused. Growth adds
+  nothing until that is fixed. Most likely cause: Muon on the router - a row no text admits gets only the balance
+  term's gradient, far below Muon's resolution, so it barely moves (E52). The fix runs since the restart at step
+  2,075,068 (11-04): the routing bias's floor rule (`pool.route_floor` 0.1, `route_bias` 2e-4) lifts newborns on
+  trial into the vote (E53). The first two newborns reached the card 1,669 steps after the restart, at an offset
+  of 0.333. By 2,237 steps after it, 11 of the twelve had been admitted (1.32M characters), each held at its own
+  offset by the floor's feedback, and held-out was flat. The first to end its trial was not admitted once in
+  the ~3,000 steps after it, and in two hours no held offset fell: the rule brings newborns onto the card, but
+  their own rows are not yet learning to be wanted. Held-out shows nothing beyond what a restart alone does
+  (E54).
 - Training: bf16, lr 3e-4 base, trunk x0.1, weight decay 0.1, clip 1.0, optimizer muon (all matrices).
 - Parameters at step 1,622,136: core 8.27M, routers 0.20M, experts 1,248.9M (397 x 3.15M), total 1,257.3M;
   ~109M resident on the card; ~345M active per byte (two prelude blocks + attention + top-8 at 12.8 rows),
   which is the size the scaling chart's 6ND uses.
 - Held-out (data/val): arithmetic, chat, chat_hermes, chess, code, reasoning, stories, wikipedia. Shares automatic
-  since 2,329.0M (minagi/lanes.py).
+  since 2,329.0M (minagi/lanes.py), of characters since 11-03 (of visits before, E47).
 
 ## Lanes
 
-From `runs/corpus_index.json` (files and bytes) and the manifest's `lanes` (10-29). The schedule allocates visits,
-and a visit is one file's passage of up to 32,768 characters, so a lane's share of the characters read follows its
-visit share times its mean visit length (E47). Characters read are measured per lane only since the automatic
+From `runs/corpus_index.json` (files and bytes) and the manifest's `lanes` (10-29). Until 11-03 the schedule
+allocated visits, and a visit is one file's passage of up to 32,768 characters, so a lane's share of the characters
+read followed its visit share times its mean visit length (E47). Shares are of characters from the first start with
+that change: it carries the visit shares it finds over as the characters they gave, then moves toward the targets. Characters read are measured per lane only since the automatic
 schedule began at 2,329.0M; before that the run took equal turns of visits, and the "read" column estimates that
 stretch from the mean visit lengths (the manifest instead records 291.1M each for it, an even split of 2,329.0M).
 
@@ -114,9 +127,26 @@ the share of its text seen.
 - ARC scores: only on data/eval copies; ARC Prize 2026 runs Kaggle offline tracks (check deadlines before
   relying on them).
 - Proposed, not run: the learning rate under Muon (x0.04 vs x0.014 over 30M chars, on a copy).
+- Proposed, not built (11-03): training among several participants from one checkpoint on their own data -
+  rounds that merge the trunk and the shared experts by averaging deltas, and exchange only experts born on
+  another participant's machine, chosen on the receiver's dev text and admitted as newborns in trial. A pilot
+  first: two branches on disjoint subjects, against one model trained on the union.
 - GitHub: 8 open issues and 11 open pull requests on 2026-10-31, not yet triaged. Issue #33 reports that the
   experts a forward admits are chosen from the whole forward's text, so a character's score can depend on
-  characters after it and published scores may be slightly optimistic; the size is unmeasured.
+  characters after it and published scores may be slightly optimistic: measured on 143 of 240 blocks at
+  +0.004 to +0.011 nats/char per subject (E48); the rest of the blocks and the fix come before a correction.
+- Held-out as measured is the model's training loss: 0.5658 at step 1,983,939 is halting-weighted
+  cross-entropy 0.5588 plus the 0.01 KL halting term 0.0069; the returned logits score 0.5572 (E50). Reporting
+  cross-entropy would be a measurement correction (conventions.md), not a gain; lowering `ponder_beta` or
+  moving `halt_prior` would only shrink the KL part.
+- Weight edits found nothing to take (E50): read-out, depth, temperature, gate and router edits are all at or
+  above the unedited model on held-out. Inference at a 12-row ceiling scores the same as 24 and evaluates ~18%
+  faster (not adopted; needs an inference ceiling apart from training's `max_steps`).
+- Found in the weights (E49), not yet acted on: grown experts' router rows are near-twins (a child's row is
+  the average of its 16 parents'); the gate vector's weight decay shrinks every expert's gate at every step,
+  used or not; 153 of 265 byte embeddings have collapsed onto one direction (tied embeddings), so non-ASCII
+  text is hardly readable; ~70 experts have gates below 0.01, and zeroing their gates costs nothing, but
+  removing them costs +0.0014 held-out cross-entropy (E51): kept.
 - Deferred by the author: pruning ~150 experts; chat_hermes dedup; bigger steps; training on the
   RX 6800 XT.
 - If grad-norm spikes recur: skip steps far above the recent mean, or confirm a passage's loss on a copy
@@ -124,10 +154,6 @@ the share of its text seen.
 - Known, unfixed (reported 2026-09-27, still in the code 2026-10-28): `PooledMLP.aux` is overwritten at
   every row, so `pool_aux()` (weight 0.01) sees only the last row's value; a gate tensor replaced by growth
   or pruning is re-adopted by `train.py _resync_opt` into a group with weight decay 0 (1-D tensors).
-- Known, unfixed (found 2026-10-29, E47): the lane schedule values characters (alpha L / D) but allocates visits,
-  so lanes of long files (chess, arithmetic) get ~2.2x their share in characters and wikipedia a third of it;
-  "arithmetic at the 1/32 floor" is 1/32 of visits, ~7% of characters. Paying credit by characters read would
-  match the rule to its worth; it changes the run's reading, so it is the author's call.
 
 ## The working tree
 
@@ -143,7 +169,7 @@ the share of its text seen.
 ## The machine
 
 - One RTX 3070 Laptop GPU, 8 GB, which the run keeps busy; system RAM is shared with the run (its RSS is
-  ~12 GB at a 288-expert RAM tier). The AMD measurements were made on an RX 6800 XT, 16 GB.
+  ~12 GB at a 288-expert RAM tier of two-moment experts; 384 one-moment experts hold the same bytes). The AMD measurements were made on an RX 6800 XT, 16 GB.
 - This repository is public (github.com/volotat/mini-AGI) and, since 2026-10-31, the only one; the run reads
   and writes `data/`, `weights/` and `runs/` inside its folder. The author commits and pushes. The
   weights' snapshots are on Hugging Face (`Volotat/mini-AGI-undertrained`, publish_weights.sh).
