@@ -7,6 +7,10 @@ current: the adaptation trace is the decoder's loop guard (`decoding.adapt_stren
 per finished exchange (route C's verdict), at the run's own rate since 2026-10-19 (minagi/governor.py). Superseded: the machinery of section 5 (noted in place). The order of work in section
 6 was not acted on: no commit measures `contrastive_generate`, a floor on the rate of genuine choices,
 depth perturbation or expert rotation. The `runs/*comparison.txt` files it cites are not tracked (of `runs/`, git keeps only samples.txt).
+2026-11-06: section 1's "no amount of training removes it" does not hold at the lengths that matter (section 7,
+E56): the loops in the samples are learned, and published training objectives remove most of them under plain
+greedy decoding. Built the same day: loop practice (`training.loop_practice_every` 8, E57), which removes the
+prose and code loops in the weights; the trace stays for the arithmetic lane's loop, a tie it does not touch.
 
 
 How the model is currently stopped from repeating itself, why that works,
@@ -569,3 +573,65 @@ Order I would work in:
 
 *Numbers throughout are from runs recorded in `runs/decoding_comparison.txt`
 and `runs/combined_comparison.txt`.*
+
+---
+
+## 7. Training the argmax instead of patching the scores (2026-11-06)
+
+Research only; nothing here is built. E56 measured where the samples' loops come from, and the literature says
+what removes them in the weights, with the decoder left as plain argmax.
+
+**Two mechanisms (E56).** (1) A tie at a genuinely open choice broken toward the copy: the arithmetic digits
+win 0.110 to 0.109 and repeat at 0.109/0.109 in every later line. The lane's generator has the same tie, and its
+own character-by-character argmax is one line (`add 6 + 2 = 8`) drawn afresh each time, so a perfect predictor
+of the lane loops too. (2) A copy, once made, raising its own odds: a repeated real sentence goes from 0.78 to
+0.91 mean probability over six repetitions (none in arithmetic or chess), and the code loop's least likely choice
+from 0.26 to 0.89. These are the two causes the literature names: argmax amplifying small biases at hard or open
+steps (Pipis et al. 2025, on reasoning models), and the self-reinforcement effect (Xu et al. 2022).
+
+**Section 1, revisited.** A deterministic map on a finite space must cycle, but the bound is the number of
+possible windows, 265^4096, not 140 characters. The loops seen are learned behaviour. What a better predictor
+cannot remove is mechanism (1): the argmax of a calibrated near-uniform choice is decided by noise. So the
+writing has to be trained to depart from calibration at those choices. At true ties (the arithmetic digits)
+that is free. At the wider near-ties of prose and code the copy is right about half the time, and demoting it
+bluntly costs +0.0033 nats per character of held-out (E56). There the departure belongs in what the model writes
+rather than in what it predicts, or must be kept small enough to act only on true ties.
+
+**What has removed loops under plain greedy decoding, in the weights:**
+- Sequence-level unlikelihood (Welleck et al. 2020): the model's own greedy continuations, tokens of repeated
+  4-grams pushed down. Repeated 4-grams 0.442 -> 0.137 with perplexity 25.64 -> 25.42; 0.058 with the
+  token-level term added (human text 0.006).
+- DITTO (Xu et al. 2022): a real sentence repeated to fill the window; each repetition's probability trained
+  toward lambda = 0.5 of the previous one's. Greedy sentence repetition 14.5% -> 2.85%, perplexity
+  25.68 -> 24.33, preferred by people 84% to 16% over plain likelihood. It flattens the self-reinforcement curve;
+  phrase-level repetition only halves (44% -> 22%, human 1.1%).
+- Loop-onset preference (FTPO, Paech et al. 2025; applied to loops by Liquid AI in 2026): in the model's own
+  low-temperature output, the first token of a loop is the rejected token, and its plausible top alternatives
+  are the chosen ones. They are trained above it by a margin, with all other logits anchored to the starting
+  model. Greedy loop rate 22.9% -> 1% on a 4B model, 10.2% -> 1.4% on a 2.6B model; rounds repeat because fixed
+  loops expose new ones.
+- Also: SelfCont (Guan and Huang 2023) factors an early checkpoint's repetition predictions out of training;
+  repetition dropout (Li et al. 2023) masks attention to repeated n-grams in training data and costs perplexity
+  (21.98 -> 28.26); MixCE (Zhang et al. 2023) helps sampling but leaves greedy loops.
+
+**Boring against intended.** What separates them is the real text in the same context. Every term above that
+works without damage is relative to it. It penalizes repetition only where the real continuation does not
+repeat, and plain likelihood keeps refrains, code and tags.
+
+**Proposed for this model (not built).** First a loop meter: per subject, self-reinforcement curves, the greedy
+loop rate on real prefixes against their real continuations, and a probe of repetition the real text intends.
+Then two cheap teacher-forced terms: a margin against the copy candidate at near-ties the real text does not
+copy, and DITTO-style repeated spans of real text at character level. Then rounds of loop-onset pairs from the
+model's own greedy writing. The trace retires when raw greedy matches the real text's repetition per subject.
+
+Section 4's harm came from learning the model's own output as a target, which confirms the loop. These terms
+learn against the loop instead: the same signal with the opposite sign.
+
+**Built (2026-11-06, E57).** Loop practice, as proposed, at character level: the span's whole log-probability
+held to at most half the previous copy's, one-sided, so the push lands on the open choices and spelling is left
+alone. From the same weights and 3M characters, every 8th step cost +0.0003 held-out (noise) and took the sample
+prompts from 32.5% to 18.1% repeated 8-grams, every 2nd step +0.003 and 12.5%. The tie preference (a margin
+against the copy at ties, from real text) did nothing measurable, even on arithmetic alone, and was removed: in
+real text the line before a tie is random, in writing it is the model's own mode line. Freeing the first copy
+changed nothing. Arithmetic's free-running loop remains; the untested candidates for it are a generator whose
+next line never repeats a recent line's start, and loop-onset preference rounds on the model's own writing.

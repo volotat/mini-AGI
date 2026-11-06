@@ -299,6 +299,43 @@ class FileReader:
         self.seen += n
         return loss
 
+    def practice(self, lam=0.5, reps=6, rng=None):
+        """
+        A loop-practice term on the window just read (minagi/practice.py): a
+        real span from it, written out `reps` times after its real preceding
+        text, scored so that each copy is at most `lam` times as likely as
+        the one before. Returns the loss to learn from, or None when the
+        window has no span to offer. Nothing is read: the cursor stays where
+        it is.
+        """
+        from .practice import practice_term
+        end = self.pos
+        ids = self.data[max(0, end - self.context):end + 1].astype(np.int64)
+        got = practice_term(self.model, ids, self.context, self.device,
+                            lam, reps, rng)
+        if got is None:
+            return None
+        loss, self.practiced = got
+        return loss
+
+    def self_play(self, chars=64, rng=None, sample=False):
+        """
+        A self-play term on the window just read (minagi/practice.py): the
+        model writes on from a place in it, and learns the real continuation
+        up and its own down. Returns the loss to learn from, or None when the
+        window has no place to write from. Nothing is read: the cursor stays
+        where it is.
+        """
+        from .practice import self_play_term
+        end = self.pos
+        ids = self.data[max(0, end - self.context):end + 1].astype(np.int64)
+        got = self_play_term(self.model, ids, self.context, self.device,
+                             chars, rng, sample)
+        if got is None:
+            return None
+        loss, self.played = got
+        return loss
+
     def _measure(self, n):
         """
         The same number, without paying for gradient reach nobody uses.

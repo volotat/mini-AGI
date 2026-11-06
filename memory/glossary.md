@@ -82,6 +82,10 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
   `prune.dying_at` 0.65; **pruned**: at 1.0, file and all.
 - **originals / grown**: the 31 experts left of the 64 a fresh model starts with (gates ~1.2, ~54% of routing) and
   the 366 grown since (median gate ~0.04) (E34).
+- **loop practice** (`training.loop_practice_every`, `_lambda`, `_reps`; `minagi/practice.py`): after every Nth
+  reading step, one more step on a real span of the window written out again; each copy is held to at most
+  lambda times as likely as the one before (E57). **loop meter** (`tools/loop_meter.py`): greedy writing against
+  real text on fixed openings, the sample prompts, the self-reinforcement curve and copying at open choices.
 - **adaptation trace** (`decoding.adapt_strength` 2.5, `decoding.adapt_decay` 0.88): the decoder's loop guard; what
   was just written is suppressed, and the suppression fades (adaptation.md). Decoding is greedy: no random numbers.
 - **the controller / plasticity / the governor**: the learning-rate controller (`minagi/plasticity.py`), run through
@@ -155,7 +159,8 @@ repeats 26% of 8-grams, greedy with no guard
 8. the share of repeated 8-grams in the `[raw]` samples.
 
 Then the samples: for each prompt, `[raw]` (greedy, no guard) and `[adapted]` (with the adaptation trace), each with
-its own repeated-8-gram share. Older checks lack some of these fields; `minagi/heldout.py` `parse_log` reads every
+its own repeated-8-gram share; `samples.raw_only` (config.yaml, since 2026-11-06) writes `[raw]` alone, and
+`samples.chars` sets the length, 140 by default. Older checks lack some of these fields; `minagi/heldout.py` `parse_log` reads every
 format the log has had.
 
 ## Repository words

@@ -471,3 +471,33 @@ remove the newborn rate, newborn gate as a share of parents', and Muon (Liu et a
   2,115,355, the term's gradient is 0.12% of the router's momentum. Its part of Muon's step raises an idle or
   newborn expert's score ~0.0001 an hour. Carried on in one direction for a trial, it would change under half of
   a window's 32 card slots. Use is spread by the texts' votes, not by the term (E55).
+
+## 2026-11-06 - where greedy loops come from
+
+- 11-06: replayed on a copy, the raw greedy samples' loops have two causes (E56). In arithmetic every digit is a
+  tie (0.109 against 0.109) broken toward the line just written, the same tie the generator's own distribution
+  has, so even a perfect model of the lane would repeat one line. In prose and code a copy made at an open
+  choice raises its own odds: a sentence repeated six times goes from 0.78 to 0.91 mean probability. Literature
+  on training these away surveyed (adaptation.md section 7).
+- 11-06: the run was stopped at step 2,163,711 for this. **Loop practice** built (`minagi/practice.py`,
+  `training.loop_practice_*`, also in chat learning): after a reading step, a step on a real span of the window
+  written out six times, each copy held to at most half as likely as the one before. `tools/loop_meter.py`
+  measures greedy writing against real text; `tools/ab_pool.py --meter` runs it on every arm. From the same
+  weights and 3M characters, practice after every 8th step took the sample prompts from 32.5% to 18.1% repeated
+  8-grams (the code and word-problem loops gone) for +0.0003 in held-out, inside the noise; every 2nd step
+  reached 12.5% for +0.003. Set to every 8th step for the next start. A tie preference against the copy at free
+  choices did nothing measurable and was removed; arithmetic's free-running loop remains, and so does the
+  `[adapted]` reading (E57).
+- 11-06: **self-play** (`training.self_play_every`, off): the model writes 64 characters on from a place in the
+  window and one step raises the real continuation and lowers its own. A/B from step 2,170,135, 3M characters:
+  no held-out gain over doing nothing, little against loops (samples 20.7% against 23.2% with neither and 16.6%
+  with loop practice), a quarter of the reading speed. Not adopted; loop practice stays, its held-out cost now
+  measured at ~0.0004 (E58).
+
+## 2026-11-07 - issue #33 measured on every subject
+
+- 11-07: issue #33 (a forward's 32 experts are chosen by every character in it, later ones too) is still
+  present. Scored causally, as writing reads, held-out is +0.0084 +/-0.0014 nats/char above the published way
+  over all 8 subjects, nearly all in each block's first 2,048 characters, where the vote starts empty (E59).
+  Writing is not affected. Proposed: causal scoring in every evaluation, then a correction of the published
+  numbers; training keeps the window's vote, since nothing learns through admission.

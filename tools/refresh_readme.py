@@ -1149,9 +1149,11 @@ def main():
            "to how held-out is read, moved onto today's level; its header "
            "below is as it was written)" if best.get("shifted") else "")
         + ". "
-        "Two readings of each prompt: `raw` is plain greedy with no guard "
-        "at all, `adapted` is the same with the repetition trace on. "
-        f"The whole history is in [runs/samples.txt](runs/samples.txt).*\n\n"
+        + ("Two readings of each prompt: `raw` is plain greedy with no guard "
+           "at all, `adapted` is the same with the repetition trace on. "
+           if "[adapted]" in best_b else
+           "Each prompt is written plain greedy, with no guard at all. ")
+        + f"The whole history is in [runs/samples.txt](runs/samples.txt).*\n\n"
         "```\n" + BAR + best_h + BAR + best_b.rstrip() + "\n```\n\n</details>"
     )
     out, k = region(out, "run-blocks", body); ok = ok and k

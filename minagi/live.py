@@ -71,8 +71,15 @@ class LiveLearner:
     def __init__(self, model, lr=3e-4, trunk_lr_mult=0.2, wd=0.1, clip=1.0,
                  aux_weight=0.0, save_every=8, weights_dir=None, manifest=None,
                  chunk=512, context=None, optimizer="adamw",
-                 muon_params="all"):
+                 muon_params="all", practice_every=0, practice_lambda=0.5,
+                 practice_reps=6):
         self.model = model
+        # loop practice, as training takes it (minagi/practice.py): after
+        # every `practice_every` steps one more, on a span of the window
+        # written out again. 0 is off.
+        self.practice_every = int(practice_every or 0)
+        self.practice_lambda = float(practice_lambda)
+        self.practice_reps = int(practice_reps)
         # What the model was loaded as. save() writes the manifest that names
         # every tensor's shape, and without this it writes an empty one: the
         # directory then claims the default vocabulary of 8192 while holding
@@ -95,6 +102,8 @@ class LiveLearner:
         from .plasticity import Plasticity
         self.plast = Plasticity.restore(self.manifest.get("plasticity"))
         self.step0 = int(self.manifest.get("step") or 0)
+        import numpy as np
+        self.prng = np.random.default_rng([7041, max(0, self.step0)])
         self.chars0 = float(self.manifest.get("read_chars") or 0)
         self.nats0 = float(self.manifest.get("read_nats") or 0.0)
         self.chars, self.nats = 0, 0.0
@@ -230,8 +239,36 @@ class LiveLearner:
         rec = {"step": self.steps, "chars": len(ids), "loss": float(loss),
                "grad_norm": gn, "lr": self.opt.param_groups[-1]["lr"],
                "scale": scale, "note": note, "at": time.time()}
+        if self.practice_every and self.steps % self.practice_every == 0:
+            pr = self._practice(ids, dev)
+            if pr is not None:
+                rec["practice"] = pr
         self.log.append(rec)
         return rec
+
+    def _practice(self, ids, dev):
+        """One loop-practice step on `ids`, the window just learned from, as
+        training takes one after its steps (minagi/practice.py). It reads
+        nothing new, so the stream's counts stay as they were. Returns the
+        term, or None when the window has no span to offer."""
+        from .practice import practice_term
+        was_training = self.model.training
+        self.model.train()
+        try:
+            got = practice_term(self.model, ids, self.context, dev,
+                                self.practice_lambda, self.practice_reps,
+                                self.prng)
+            if got is None:
+                return None
+            loss, _ = got
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
+            self.opt.step()
+        finally:
+            self.opt.zero_grad(set_to_none=True)
+            if not was_training:
+                self.model.eval()
+        return float(loss)
 
     def check_if_due(self):
         """Training's held-out check, when it is due: read held-out at the
@@ -362,7 +399,13 @@ class LiveLearner:
                       context=context, save_every=save_every,
                       weights_dir=weights_dir, manifest=man,
                       optimizer=str(get(c, "training.optimizer", "adamw")),
-                      muon_params=str(get(c, "training.muon_params", "all")))
+                      muon_params=str(get(c, "training.muon_params", "all")),
+                      practice_every=int(get(
+                          c, "training.loop_practice_every", 0) or 0),
+                      practice_lambda=float(get(
+                          c, "training.loop_practice_lambda", 0.5)),
+                      practice_reps=int(get(
+                          c, "training.loop_practice_reps", 6)))
         # a newborn's trial, in the steps the run counts, as train.py sets it:
         # the routing bias's floor rule reads it after every step taken here
         # too, and without it would take every newborn's lift away

@@ -509,3 +509,178 @@ at the full rate whatever the weight; E21's 0.01 took the experts in use from 59
 five Newton-Schulz steps cannot lift directions this far below the strongest (E52). Turning it off should change
 nothing measurable. To matter it would need ~1,000x or more, which flattens every expert's use (E21, E35). The
 weight is the author's. The comments on it in config.yaml and `PagedPool.note_balance` still describe AdamW.
+
+**E56 how the greedy loops start (2026-11-06, step 2,162,417, 424 experts, CPU).** The raw greedy samples the run
+logged at this step were replayed on a copy of its weights, one forward per character as `sample_now` writes them
+(the CPU's argmax was the logged character at 1,259 of 1,260 positions). Every choice was recorded with its
+distribution and its copy candidate: the character that continued the longest earlier occurrence of the text's
+current suffix.
+- Arithmetic (after `5205`, every line `add 3 + 1 = 4`): the digits are exact ties. The first operand's '3' won
+  0.110 to 0.109, the second's '1' 0.103 to 0.102, and every later line repeats them at 0.109/0.109 and
+  0.102/0.101: the repeat wins each tie by under 0.001 and its probability never rises. Only choices that were
+  already the argmax drift toward the repeat ('a' starting a line 0.477 -> 0.821; the space ending a one-digit
+  operand 0.107 -> 0.220). The generator itself gives every first digit 1-9 0.110 (2M lines of
+  `corpora/arithmetic.py`), and its own character-by-character argmax is `add 6 + 2 = 8`: one-digit addition, the
+  shape the model writes. Lines are drawn independently, so the next line has the same argmax: a perfect model of
+  the lane loops under greedy decoding.
+- Code (`Merge a sorted array of sorted array ...`, period 16), wikipedia (period 74) and chat_hermes (a line
+  repeated, period 39) start at open choices the copy wins narrowly (code: 'array' 0.258 against 0.150, 'of'
+  0.279 against 0.221; wikipedia '[[R' 0.116 against 0.067) and then feed themselves. In the code loop the mean
+  probability of the chosen characters per repetition is 0.831, 0.868, 0.881, 0.905, 0.923, 0.956, 0.988, the
+  least likely choice in a repetition rises from 0.258 to 0.890, and entropy falls from 0.64 to 0.08 nats.
+- Xu et al. 2022's self-reinforcement measurement on held-out text (a real line or sentence after 200 characters
+  of its own preceding text, repeated 6 times; 37 spans): the mean probability of its characters per repetition
+  is 0.776, 0.851, 0.881, 0.894, 0.903, 0.911, and the share that are the argmax 0.824 -> 0.936. Per subject,
+  first to sixth: wikipedia 0.664 -> 0.990 (1 span), chat_hermes 0.712 -> 0.982, chat 0.823 -> 0.957, code
+  0.839 -> 0.966, reasoning 0.790 -> 0.932, stories 0.765 -> 0.877. None in arithmetic (0.788 -> 0.769, 4
+  spans) or chess (0.824 -> 0.814, 2 spans): there a repeated line gains nothing.
+- Real held-out text, teacher-forced (3 windows of 1,536 characters per subject; a copy candidate needs an
+  earlier match of 4+ characters). At open choices (entropy above 1 nat) the argmax is the copy candidate more
+  often than the real text copies, in every subject: arithmetic 4.1% against 1.8%, chat 10.0/6.0, chat_hermes
+  6.5/4.9, chess 10.4/7.5, code 14.6/10.3, reasoning 20.2/13.4, stories 10.4/9.4, wikipedia 16.3/11.4. Near-tie
+  copies (the argmax is the copy candidate, less than 1 logit ahead) are 1.1-3.4% of characters, 2.2% equally
+  weighted, and right 40-55% of the time (arithmetic 15%). Lowering every one of them to 0.5 logit below the
+  runner-up would change the loss on the real character by -0.0004 nats per character (arithmetic) to +0.0071
+  (reasoning), +0.0033 equally weighted.
+Verdict: the two mechanisms the literature names. Ties at genuinely open choices are broken toward the copy
+(arithmetic), which a perfect predictor does as well, so predicting better cannot remove it; and a copy, once
+made, raises the odds of the next (prose and code), Xu et al.'s self-reinforcement at about their size. Both
+are what training-time objectives against repetition target (adaptation.md section 7). A margin against the
+copy is not free on the reading distribution outside arithmetic: at a near tie the copy is right about half
+the time, so demoting it there bluntly costs ~6x the run's ±0.0005 noise in held-out.
+
+**E57 loop practice against greedy loops (2026-11-06, step 2,163,711, 424 experts).** The run was stopped for
+this. `tools/loop_meter.py` (new) measures greedy writing against real text on a weights directory, read only:
+the 9 sample prompts as the raw reading writes them, 48 real held-out openings (6 per subject, 512 characters
+of real text, 256 written) against their real continuations, the self-reinforcement curve (12 real spans per
+subject repeated 6 times after 200 characters of their own text), and copying at open choices. A loop is a
+block repeated 3+ times at a text's end over 24+ characters, with a letter or digit, not one character.
+- Baseline, the run's weights: samples 31.2% repeated 8-grams, 2 of 9 end in a loop (arithmetic, code;
+  chat_hermes 64% and wikipedia 51% repeat without a clean loop). Openings: 10 of 48 written continuations end
+  in a loop, none of the real ones; repeated 8-grams 39.5% written against 6.7% real. A repeated span's mean
+  probability by repetition 0.748, 0.705, 0.771, 0.801, 0.817, 0.829. At open choices the argmax copies 12.8%,
+  the real text 9.7%; where the real text continues an earlier passage of 8+ characters the argmax does too
+  96.2% of the time (repetition the writer intended).
+- Loop practice (`minagi/practice.py`, `training.loop_practice_*`): after a reading step, one more optimizer step
+  on a real span of the window just read (8-200 characters, from a word start to a space or newline, never one
+  its own text repeats) written out 6 times after up to 512 characters of its real preceding text, with the
+  one-sided term mean over n of relu(log P_n - sg(log P_(n-1)) - log 0.5) / L - each copy at most half as likely
+  as the one before, spelling left alone because a span's log-probability pushes hardest where the choice was
+  open. Speed probe, not controlled: a copy read 1M characters at the run's rate with a practice step after
+  every reading step (488 of them; 1.6 s a step against ~1.07). The term stayed ~0.145; its gradient norm is
+  ~43, so every practice step is clipped to 1 and weighs as much as a reading step. Samples 31.2% -> 15.0%
+  repeated 8-grams (code 77% -> 11%, its loop gone; chat_hermes 64% -> 2%; reasoning 14% -> 2%; wikipedia
+  51% -> 32%; arithmetic 75% -> 86%, still a loop). Openings: loops 10 -> 7 of 48, repeated 8-grams
+  39.5% -> 30.8%. The repeated span's probability by repetition 0.742, 0.673, 0.711, 0.732, 0.748, 0.762
+  (baseline 0.829 at the sixth). Intended repetition kept 96.2% -> 95.1%. Arithmetic is untouched as expected:
+  there a repeated line already loses probability (0.650 -> 0.539 by the sixth), so the term never fires; its
+  loops are ties (mechanism 1), which is what `training.tie_preference` is for.
+- A/B (`tools/ab_pool.py --meter`, every arm a copy of the stopped run's weights reading the same 3M characters
+  at the run's rate; held-out of the weights as they were 0.5587 over 960 blocks). Control, as the run reads:
+  held-out 0.5587; the feeding curve unchanged (0.829 at the sixth repetition); samples 32.5% repeated 8-grams,
+  2 loops; openings 8 of 48 loops, 36.2% repeated 8-grams; intended repetition kept 96.4%. Reading alone does
+  not move repetition over 3M characters, so what the probe changed was the practice.
+- both2 (practice after every 2nd reading step, lambda 0.5, every copy scored; tie preference weight 1, eps and
+  margin 0.1 logit, 5.6 positions a step): held-out 0.5618, +0.0031 on control (wikipedia +0.0065, code
+  +0.0044, reasoning +0.0043, chat_hermes +0.0040, chat +0.0036, stories +0.0019, arithmetic and chess +0.0002).
+  Samples 32.5% -> 13.4% repeated 8-grams (code 77% -> 8%, chat_hermes 64% -> 6%, wikipedia 51% -> 19%,
+  reasoning 14% -> 2%; arithmetic still a loop). Openings: loops 8 -> 8 of 48 (arithmetic 4 -> 5), repeated
+  8-grams 36.2% -> 31.8%. Sixth-repetition probability 0.829 -> 0.745 (prose subjects 0.95 -> 0.82-0.86).
+  Intended repetition kept 96.4% -> 95.4%, lower in every subject (wikipedia 95.2% -> 92.0%). The cost sits
+  where the term fires: scoring the first copy against the original pushes against copying a passage at all,
+  which real text does often. Next arm: the first copy left free (`training.loop_practice_free` 1).
+- practice2 (practice after every 2nd step, every copy scored, no tie term): held-out 0.5617, +0.0030 - the
+  whole cost of both2 is the practice; the tie term at weight 1 cost nothing measurable and did nothing
+  measurable in 3M characters (samples 12.5%, openings 7 of 48 loops, the same feeding curve and intended
+  repetition 95.4% as both2). With arithmetic 3% of reading, a few hundred of its ties met the term.
+- free2 (practice after every 2nd step with the first copy left free, `loop_practice_free` 1): held-out 0.5617,
+  the same +0.003; the same feeding curve (0.742 at the sixth repetition) and intended repetition (95.3%);
+  openings 12 of 48 loops. Leaving the first copy free changes nothing, so the cost is not what the term asks
+  but how often practice takes a step: at every 2nd step a third of all updates are practice, and under Muon each
+  moves the weights a full step away from where reading had settled. The option was removed again.
+- The tie preference cannot break arithmetic's ties from real text. Arithmetic-only probes, 330k characters (160
+  steps) at the run's rate, weight 5, margin 0.3 logit: counting the continuation of ANY earlier occurrence as a
+  copy fired 88 times a step but in a long arithmetic window every digit has followed some earlier `add `, so it
+  only shuffled the top of every tie (openings 6 -> 4 of 6 looping, the sample still a loop); counting only the
+  LATEST occurrence fired 26 times a step and changed nothing (6 of 6). In real text the line before is random;
+  in writing it is the model's own mode line, so the term never practises the situation the loop forms in.
+  Removed. Arithmetic's free-running loop is mechanism 1 and stays: the lane's own argmax line repeated.
+- practice8 (practice after every 8th step, 184 practice steps): held-out 0.5590, +0.0003 on control - inside
+  the run's noise. Samples 32.5% -> 18.1% repeated 8-grams (code 77% -> 8%, its loop gone; chat_hermes 64% ->
+  8%; wikipedia 51% -> 45% and reasoning 14% not yet); openings 7 of 48 loops, 36.3% repeated 8-grams; sixth
+  repetition 0.829 -> 0.814; intended repetition kept 96.2% (control 96.4%). The cost falls much faster than the
+  rate: a quarter of the practice for a tenth of the held-out.
+Verdict: loop practice is what works here, in the weights, with greedy decoding left plain. Set to every 8th
+step (`training.loop_practice_every` 8, from the run's next start, chat learning included): no measurable cost,
+the code and word-problem loops gone at once, and the rest gaining as the steps add up; every 2nd step does
+more sooner for +0.003. The tie preference and freeing the first copy were dropped. Arithmetic's free-running
+loop stays, so the `[adapted]` reading stays until raw greedy is nearly free of repetition. Untested next
+steps for arithmetic: a generator whose next line never repeats a recent line's start (Pipis et al.'s margin
+in the data), or loop-onset preference rounds on the model's own writing.
+
+**E58 self-play against loop practice (2026-11-06, step 2,170,135).** Proposed by the author: instead of synthetic
+repetitions, let the model write from a starting point and learn away from what it wrote. Pushing its own text
+down alone cannot work: over text sampled from the model itself the push is zero in expectation (the sum of
+p times the gradient of log p is the gradient of 1), and over greedy text it flattens the model around
+everything it writes, right or wrong. With the real continuation of the same prefix as the positive it is
+self-play in the manner of SPIN (Chen et al. 2024). Built as `training.self_play_every` (`minagi/practice.py`
+`self_play_term`, `FileReader.self_play`): after every Nth reading step the model writes 64 characters on from
+a word start in the window just read (greedy by default, `self_play_sample` draws them), then one training
+forward of two rows - the prefix with the real continuation, the prefix with its own - and one step on
+-log sigmoid((lp_real - lp_own) / 64). Where the two agree the pushes cancel. With the current model as the
+reference and drawn continuations the update is, in expectation, plain likelihood on the real text; only greedy
+continuations add a push of their own, against the model's mode in the states it writes itself.
+A/B from the same weights, 3M characters each, with held-out and the loop meter: control (the run as it is,
+loop practice every 8th step), selfplay8 (self-play every 8th step instead), none (neither).
+- Held-out of the weights as they were 0.5592 (960 blocks). control (loop practice every 8th step, as the run):
+  0.5593; samples 16.6% repeated 8-grams (the morning's baseline 31.2%: the run's own loop practice since its
+  restart shows), openings 7 of 48 loops, sixth-repetition probability 0.770, intended repetition 96.1%.
+  selfplay8 (self-play every 8th step, no loop practice): 0.5590, -0.0003 on control and lower in seven of
+  eight subjects (wikipedia -0.0010; within the noise, but one-sided); samples 20.7%, openings 8 of 48, sixth
+  repetition 0.796, intended 96.1%; reading 34 min against 28 (+21%). Its own continuation agreed with the real
+  one at 14 of 64 characters and stayed 0.35 nats a character likelier than the real one: the term never
+  settled.
+- none (neither): held-out 0.5589. Paired on the same blocks against control, selfplay8 and none are both
+  -0.0004 +/-0.0001: loop practice every 8th step costs ~0.0004 in held-out (E57's +0.0003 was the same cost,
+  then within the noise), and self-play costs nothing over doing nothing. On loops self-play is close to doing
+  nothing: samples 20.7% against 23.2% (none) and 16.6% (control), sixth-repetition probability 0.796 against
+  0.799 and 0.770; its one clear effect is the code sample (19% against none's 53%). Closeness of written text to
+  the real continuation unchanged (8-character overlap 0.090 against 0.091), non-words 1.5% against 1.7%.
+  Reading speed 1,485 characters a second against 2,009 for none and 1,840 for control: self-play costs a
+  quarter of the reading, loop practice an eleventh.
+Verdict: not worth pursuing instead of loop practice. It costs three times as much reading, does a fraction as
+much against loops, and showed no gain in closeness to real text over 3M characters. As expected: with the
+current model as reference its only new push is against the greedy mode in its own states, spread over all of
+its choices rather than the ones that loop, and the real continuation's push is plain likelihood. Loop practice
+stays at every 8th step; its held-out cost is now measured at ~0.0004. Self-play's code is off by default; its
+pair loss is what correction feedback would use (the feedback-learning direction).
+
+**E59 issue #33 again, every subject (2026-11-07, step 2,184,784, 423 experts, CPU).** E48's method on a
+hard-link snapshot of the weights, taken while the run trained: each held-out block (4,096 characters, two
+forwards of 2,048 through the cache) scored the published way and causally - position i routes among the top
+32 of the vote over positions 0..i, which is what writing one character at a time computes. Runs of positions
+with the same causal set are one forward with that set forced; a position whose vote holds fewer than 32
+experts is a single-character forward with the vote preset, as in writing. The per-position requests follow
+`minagi.pool.requests` with the floor rule's lifted probability and summed to what `admit` was given within
+1.1e-4. fp32, 3 spread blocks a subject, 49 s a block.
+- Causal minus published, nats/char: arithmetic +0.0044, chat +0.0157 (one block +0.0315), chat_hermes +0.0077,
+  chess +0.0021, code +0.0090, reasoning +0.0119, stories +0.0089, wikipedia +0.0076 (one block -0.0019). All 24
+  blocks +0.0084 +/-0.0014 (+0.012 bits/byte); E48 had +0.004 to +0.011 at step 1,773,530.
+- Each block's first chunk +0.0158, its second +0.0010: the first chunk's vote starts empty, and by the second
+  the 2,048 characters already read outweigh the chunk's own.
+- The causal sets of a first chunk's positions span 77-110 experts between them (subject means), a second
+  chunk's 34-47, so a 32-slot card holds neither in one forward.
+- The issue's repro prints its four lines unchanged on the working tree. Writing is not affected: every written
+  character is a forward of its own, and a prompt's last position sees only what came before it.
+- enwik9: 30 pieces of 2,048 bytes spread over the slice, each read cold as the frozen row reads them: published
+  1.257 bits/byte, causal 1.279, +0.0221 +/-0.0023 (+0.0153 nats/char), higher causally in all 30 (+0.003 to
+  +0.042 nats/char). The frozen and dynamic rows score every piece cold. The best-effort row reads pages from
+  their tops and was not measured.
+- Forwards an exact causal reading needs with a per-position mask, cutting a forward wherever its positions'
+  sets together outgrow the card. 32 slots: 123 a held-out first chunk (61-275), 30 a second, 97 an enwik9
+  piece - a character needs all 32, so every change of set is a new forward, as slow as this method. 48 slots:
+  5.0, 1.0 and 4.3. 64 slots: 2.5, 1.0 and 2.1. A vote first holds 32 experts at the 6th character on average
+  (4-18).
+Verdict: the issue is real and the published scores are optimistic, by ~0.008 nats/char on held-out and ~0.022
+bits/byte on cold enwik9 pieces; writing is unaffected. The fix is scoring, not training: a scoring forward
+routes each character among its causal set on a card of 48-64 slots of inference copies (0.3-0.4 GB in bf16).

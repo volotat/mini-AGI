@@ -20,7 +20,7 @@ The "final" weights are **not published yet**. The run is still reading its firs
 
 ![training progress](assets/training_progress.png)
 
-*Every sample round of the run to date: 4,364.0M characters over 4,954 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
+*Every sample round of the run to date: 4,480.6M characters over 5,059 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
 
 </details>
 
@@ -378,12 +378,12 @@ Held-out is read as whole blocks of 4,096 characters spread evenly over everythi
 There is a second variance underneath these figures. The same configuration run twice lands about 0.014 apart, because the expert dispatch is not deterministic on CUDA. **Treat about 0.03 as the threshold for a real difference**, not the error bar printed beside one score.
 
 <!-- auto:benchmarks -->
-**Where the model is** (4,364.0M characters read, 423 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
+**Where the model is** (4,480.6M characters read, 423 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
 
 | | nats/char | bits/byte |
 |---|---|---|
-| **held-out, all 8 subjects** | **0.5637** ± 0.0121 | **0.8132** |
-| train | 0.5370 | 0.7747 |
+| **held-out, all 8 subjects** | **0.5651** ± 0.0122 | **0.8153** |
+| train | 0.6151 | 0.8874 |
 
 **Held-out loss per subject:**
 
@@ -392,11 +392,11 @@ There is a second variance underneath these figures. The same configuration run 
 | `chess` | 0.375 | 0.541 |
 | `stories` | 0.446 | 0.643 |
 | `code` | 0.468 | 0.675 |
-| `chat` | 0.469 | 0.677 |
-| `reasoning` | 0.525 | 0.757 |
+| `chat` | 0.470 | 0.678 |
+| `reasoning` | 0.526 | 0.759 |
 | `arithmetic` | 0.611 | 0.881 |
 | `chat_hermes` | 0.756 | 1.091 |
-| `wikipedia` | 0.862 | 1.244 |
+| `wikipedia` | 0.870 | 1.255 |
 <!-- /auto:benchmarks -->
 
 ### enwik9 against published models
@@ -497,12 +497,12 @@ The green squares are this model on **enwik9**, the set the enwik9 table above c
 
 The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.177` with R² 0.96 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
 
-Read straight off that trend, on this model's own mixture. It has read 4.36B characters so far, in about 40 days of running. The days below assume the pace of the last 5 hours of it: 1,631 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
+Read straight off that trend, on this model's own mixture. It has read 4.48B characters so far, in about 41 days of running. The days below assume the pace of the last 7 hours of it: 1,461 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
 
-| held-out | total data read | further reading | days from here at ~1,631 char/s |
+| held-out | total data read | further reading | days from here at ~1,461 char/s |
 |---|---|---|---|
-| 0.80 BPB | 4.79B | +0.42B | ~3 |
-| **0.73 BPB** | 8.04B | +3.67B | **~26** |
+| 0.80 BPB | 4.98B | +0.50B | ~4 |
+| **0.73 BPB** | 8.04B | +3.56B | **~28** |
 
 The first one is days of reading on one laptop GPU, and it sits inside a single pass of the 8.04B-character corpus.
 

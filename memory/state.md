@@ -25,6 +25,9 @@ auto regions). timeline.md has the run's history session by session.
 
 ## The model as configured (config.yaml working copy)
 
+- 2026-11-06 (agent, uncommitted): loop practice on, `training.loop_practice_every` 8 (E57), from the run's next
+  start; chat learning takes the same steps. The run was stopped at step 2,163,711 for the A/B.
+
 - d_model 512, 8 heads, 2 dense prelude blocks (SwiGLU d_ff 1408), 1 weight-shared recurrent block applied
   up to 24 rows (min 1), PonderNet halting (halt_prior 0.072, ponder_beta 0.01, halt_thresh 0.9),
   halt_freeze on, bptt_window 24, train_steps_mean 12.8. Vocabulary 265.
@@ -133,8 +136,11 @@ the share of its text seen.
   first: two branches on disjoint subjects, against one model trained on the union.
 - GitHub: 8 open issues and 11 open pull requests on 2026-10-31, not yet triaged. Issue #33 reports that the
   experts a forward admits are chosen from the whole forward's text, so a character's score can depend on
-  characters after it and published scores may be slightly optimistic: measured on 143 of 240 blocks at
-  +0.004 to +0.011 nats/char per subject (E48); the rest of the blocks and the fix come before a correction.
+  characters after it. Still present on 11-07: scored causally (each character among the top 32 of the vote
+  up to it, as writing does), held-out is +0.0084 +/-0.0014 nats/char above the published way over all 8
+  subjects, nearly all of it in each block's first 2,048 characters, and cold enwik9 pieces +0.022 bits/byte
+  (E59; E48 before it). Writing is not affected. Proposed, not built: causal scoring in every evaluation on a
+  scoring card of 48-64 slots, training's rule unchanged, then a correction of the published numbers.
 - Held-out as measured is the model's training loss: 0.5658 at step 1,983,939 is halting-weighted
   cross-entropy 0.5588 plus the 0.01 KL halting term 0.0069; the returned logits score 0.5572 (E50). Reporting
   cross-entropy would be a measurement correction (conventions.md), not a gain; lowering `ponder_beta` or

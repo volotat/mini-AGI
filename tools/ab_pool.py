@@ -198,6 +198,8 @@ def run_arm(name, sets, a, state):
         shutil.rmtree(wdir, ignore_errors=True)
         return False
     evaluate_in(wdir, cfg, os.path.join(out, "eval.json"), a.blocks)
+    if getattr(a, "meter", False):
+        meter_in(wdir, cfg, os.path.join(out, "meter"))
     with open(os.path.join(wdir, "manifest.json")) as f:
         man = json.load(f)
     with open(os.path.join(out, "after.json"), "w") as f:
@@ -208,6 +210,21 @@ def run_arm(name, sets, a, state):
     shutil.rmtree(wdir, ignore_errors=True)
     say(f"  {name} done; copy deleted")
     return True
+
+
+def meter_in(wdir, cfg, out):
+    """The loop meter (tools/loop_meter.py) on `wdir` under the settings in
+    `cfg`, before the copy is deleted: how much the arm repeats itself when
+    it writes greedily, against real text."""
+    env = dict(os.environ, MINAGI_CONFIG=cfg)
+    t = time.time()
+    with open(out + ".log", "w") as f:
+        rc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "loop_meter.py"),
+             "--weights", wdir, "--out", out],
+            cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+    say(f"  loop meter read in {time.time() - t:.0f} s (exit {rc}) -> "
+        f"{os.path.relpath(out, ROOT)}")
 
 
 def evaluate_in(wdir, cfg, out, blocks):
@@ -620,6 +637,9 @@ def main():
         help="where each arm's copy of weights/ is made and deleted")
     ap.add_argument("--report", action="store_true",
                     help="only write the summary of what --out holds")
+    ap.add_argument("--meter", action="store_true",
+                    help="run tools/loop_meter.py on every arm's copy before "
+                         "it is deleted")
     ap.add_argument("--eval", help=argparse.SUPPRESS)
     ap.add_argument("--eval-out", help=argparse.SUPPRESS)
     a = ap.parse_args()

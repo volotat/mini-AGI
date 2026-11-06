@@ -37,6 +37,15 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
 - SETTLED: compute bf16; fp16 never (E13); fp32 on a GPU without bf16 when it has >= 14 GiB, else emulated
   bf16 (`tools/device_check.py`). Adam moments stored bf16 on disk and in RAM.
 - REJECTED: gradient accumulation (E7, no gain; flag stays 1).
+- Writing without loops (11-06, an agent's change, uncommitted until the author decides): loop practice
+  (`training.loop_practice_every` 8, `minagi/practice.py`) teaches the weights that a repetition must not feed
+  itself; from the same weights and 3M characters every 8th step cost +0.0003 held-out and took the sample
+  prompts from 32.5% to 18.1% repeated 8-grams, every 2nd step +0.003 and 12.5% (E57). REJECTED: a tie
+  preference against the copy at free choices (no measurable effect, E57); leaving the first copy free (no
+  change, E57). Arithmetic's free-running loop remains: the lane's own argmax line repeated (E56). The
+  `[adapted]` reading stays until raw greedy is nearly free of repetition. REJECTED (11-06): self-play in its
+  place, the model's own continuation against the real one (E58: little effect on loops, a quarter of the
+  reading speed); loop practice's held-out cost measured at ~0.0004 (E58).
 
 ## Learning rate and optimiser
 

@@ -94,7 +94,7 @@ pool:
   # row at the usual pace whatever the weight. 0 turns it off. In a 15-minute
   # test 0.01 took the experts in use on held-out from 59 to 114, at a cost of
   # 0.023 in held-out loss over those minutes.
-  balance: 5e-5
+  balance: 1.5e-4
 
   # THE TEMPERATURE OF EXPERT SELECTION - which experts compute a character,
   # NOT which character comes out. Characters are always chosen greedily; any
@@ -181,6 +181,33 @@ training:
   optimizer: muon
   muon_params: all        # all, trunk or pool: which weight matrices muon steps
 
+  # LOOP PRACTICE (minagi/practice.py): teaching the weights that a
+  # repetition must not feed itself, so that plain greedy writing stops
+  # looping in prose and code. After every `loop_practice_every` reading
+  # steps, one more step: a real span of the window just read - a phrase,
+  # line or sentence its own text does not repeat - written out
+  # `loop_practice_reps` times after its real preceding text, each copy held
+  # to at most `loop_practice_lambda` times as likely as the one before.
+  # Nothing is read, and the repetitions are never predicted. 0 is off.
+  # From the same weights and 3M characters (memory/experiments.md E57):
+  # every 8th step took the sample prompts from 32.5% repeated 8-grams to
+  # 18.1% for +0.0003 in held-out, inside the run's noise; every 2nd step to
+  # 12.5% for +0.003. The effect grows with the steps practised, so the run
+  # keeps gaining at 8. It does not touch the arithmetic lane's loop, a tie
+  # the copy wins at a free choice (E56).
+  loop_practice_every: 8
+  loop_practice_lambda: 0.5
+  loop_practice_reps: 6
+  # SELF-PLAY (minagi/practice.py): after every `self_play_every` reading
+  # steps, the model writes `self_play_chars` characters on from a place in
+  # the window just read, and one step raises the real continuation and
+  # lowers its own. Greedy, as it writes; `self_play_sample` draws it
+  # instead. 0 is off. In place of loop practice it did little against loops
+  # and cost a quarter of the reading speed (memory/experiments.md E58).
+  self_play_every: 0
+  self_play_chars: 64
+  self_play_sample: false
+
 growth:
   # Every `every_chars`, add `k` experts if all five brakes are off:
   #   ROOM     there is disk and VRAM for it
@@ -255,6 +282,15 @@ decoding:
   adapt_decay: 0.88       # half-life of 5.4 characters; 0 disables it
 
   rep_penalty: 1.0        # the weaker alternative, off at 1.0
+
+samples:
+  # What a training session writes to its sample log (runs/samples.txt) at
+  # every check: each of train.py's SAMPLE_PROMPTS, one per subject, written
+  # on greedily. `--sample-every` sets how often, `--sample-log` where.
+  chars: 320              # characters written after each prompt
+  raw_only: true          # true writes only the plain greedy reading (`raw`);
+                          # false adds the `adapted` one, written with the
+                          # adaptation trace of `decoding` above
 
 plots:
   enabled: true           # redraw the graphs whenever the sample log grows

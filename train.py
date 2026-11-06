@@ -1251,6 +1251,17 @@ def cmd_read(args):
     recent = collections.deque(maxlen=400)     # the training loss lately
     loss_log = (open(args.loss_log, "a", buffering=1, encoding="utf-8")
                 if getattr(args, "loss_log", None) else None)
+    # Loop practice (minagi/practice.py) draws its own random numbers, so the
+    # text read is the same with it on or off.
+    practice_every = int(getattr(args, "loop_practice_every", 0) or 0)
+    prng = np.random.default_rng([max(0, int(args.seed)), 7041,
+                                   max(0, int(step))])
+    practiced = collections.deque(maxlen=400)
+    practiced_gn = collections.deque(maxlen=400)
+    play_every = int(getattr(args, "self_play_every", 0) or 0)
+    sprng = np.random.default_rng([max(0, int(args.seed)), 7042,
+                                   max(0, int(step))])
+    played = collections.deque(maxlen=400)      # (term, agreeing characters)
     last_gap = None                            # held-out minus train, when known
     # How much information has been read, as against how many characters were
     # passed over: the loss IS the information content of what was read, so
@@ -1424,6 +1435,34 @@ def cmd_read(args):
                                    else None),
                          "t": round(time.time(), 2)},
                         separators=(",", ":")) + "\n")
+                if practice_every and (step + 1) % practice_every == 0:
+                    # One more step, on a real span of this window written
+                    # out again. Nothing is read, so the cursor, the
+                    # characters counted, the loss log and the clocks stay
+                    # where the reading left them.
+                    opt.zero_grad(set_to_none=True)
+                    pl = r.practice(args.loop_practice_lambda,
+                                    args.loop_practice_reps, prng)
+                    if pl is not None:
+                        pl.backward()
+                        practiced_gn.append(float(
+                            torch.nn.utils.clip_grad_norm_(
+                                model.parameters(), args.clip)))
+                        opt.step()
+                        practiced.append(float(pl))
+                if play_every and (step + 1) % play_every == 0:
+                    # One more step: the model writes on from a place in
+                    # this window, and learns the real continuation up and
+                    # its own down. Nothing is read, as with practice.
+                    opt.zero_grad(set_to_none=True)
+                    sp = r.self_play(args.self_play_chars, sprng,
+                                     args.self_play_sample)
+                    if sp is not None:
+                        sp.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                                       args.clip)
+                        opt.step()
+                        played.append((float(sp), r.played["agree"]))
                 by_pos[j].append(float(loss))
                 seen += args.chunk
                 nats += float(loss) * args.chunk
@@ -1503,6 +1542,9 @@ def cmd_read(args):
                     print(f"    samples -> {args.sample_log}"
                           + (f"  train {float(np.mean(recent)):.4f}"
                              if recent else "")
+                          + (f"  loop practice {float(np.mean(practiced)):.4f}"
+                             f" (grad {float(np.mean(practiced_gn)):.2f})"
+                             if practiced else "")
                           + (f"  held-out {v_:.4f}" if v_ is not None else "")
                           + (f"  logit {max(logits.values()):.1f}"
                              if logits else "")
@@ -1652,6 +1694,16 @@ def cmd_read(args):
           f"checks and samples included)")
     if losses:
         print(f"  mean loss over the files: {np.mean(losses):.4f}")
+    if played:
+        print(f"  self-play: last {len(played)} steps' term "
+              f"{np.mean([p for p, _ in played]):.4f}, its own continuation "
+              f"agreeing with the real one at "
+              f"{np.mean([a for _, a in played]):.1f} of "
+              f"{args.self_play_chars} characters")
+    if practiced:
+        print(f"  loop practice: last {len(practiced)} steps' term "
+              f"{np.mean(practiced):.4f}, gradient norm "
+              f"{np.mean(practiced_gn):.2f} against a clip of {args.clip:g}")
 
     if ev is not None:
         v = ev.run(eval_steps, spread=True); se = v.pop("stderr", 0.0)
@@ -1751,8 +1803,9 @@ def _sample_variants(args):
     and it is the one whose repeat rate is a fact about the model rather than
     about the decoding rule.
 
-    --sample-raw-only drops the guarded reading, for when the raw text is good
-    enough that the guard is no longer telling you anything.
+    --sample-raw-only, or samples.raw_only in config.yaml, drops the guarded
+    reading, for when the raw text is good enough that the guard is no longer
+    telling you anything.
     """
     v = [("raw", dict(rep_penalty=1.0, adapt_strength=0.0))]
     if not getattr(args, "sample_raw_only", False):
@@ -2337,6 +2390,29 @@ def main():
                     default=_cfg(_c, "training.weight_decay", 0.1))
     rd.add_argument("--clip", type=float,
                     default=_cfg(_c, "training.clip", 1.0))
+    rd.add_argument("--loop-practice-every", type=int,
+                    default=_cfg(_c, "training.loop_practice_every", 0),
+                    help="after every this many steps, one more on a loop-"
+                         "practice window (minagi/practice.py); 0 is off")
+    rd.add_argument("--loop-practice-lambda", type=float,
+                    default=_cfg(_c, "training.loop_practice_lambda", 0.5),
+                    help="each copy of a practised span at most this times "
+                         "as likely as the one before")
+    rd.add_argument("--loop-practice-reps", type=int,
+                    default=_cfg(_c, "training.loop_practice_reps", 6),
+                    help="copies of the span in a practice window")
+    rd.add_argument("--self-play-every", type=int,
+                    default=_cfg(_c, "training.self_play_every", 0),
+                    help="after every this many steps, one more on the "
+                         "model's own continuation against the real one "
+                         "(minagi/practice.py); 0 is off")
+    rd.add_argument("--self-play-chars", type=int,
+                    default=_cfg(_c, "training.self_play_chars", 64),
+                    help="characters the model writes for a self-play step")
+    rd.add_argument("--self-play-sample", action="store_true",
+                    default=bool(_cfg(_c, "training.self_play_sample", False)),
+                    help="draw the model's continuation from its "
+                         "distribution instead of writing it greedily")
     rd.add_argument("--seed", type=int, default=0)
     rd.add_argument("--save", action="store_true",
                     help="keep what it learned; without this the run is a dry "
@@ -2363,7 +2439,9 @@ def main():
     rd.add_argument("--sample-every", type=float, default=0,
                     help="minutes between writing sample generations")
     rd.add_argument("--sample-log", default="runs/samples.txt")
-    rd.add_argument("--sample-chars", type=int, default=140)
+    rd.add_argument("--sample-chars", type=int,
+                    default=int(_cfg(_c, "samples.chars", 140)),
+                    help="characters written after each sample prompt")
     rd.add_argument("--save-every", type=float,
                     default=_cfg(_c, "training.save_every", 5),
                     help="minutes between checkpoints; 0 to save only at the "
@@ -2523,8 +2601,10 @@ def main():
                          "start: `since 40` was set at 60M read and by 189M "
                          "it was showing the whole history again")
     rd.add_argument("--sample-raw-only", action="store_true",
+                    default=bool(_cfg(_c, "samples.raw_only", False)),
                     help="write only the unguarded greedy reading of each "
-                         "prompt, not the adapted one as well")
+                         "prompt, not the adapted one as well "
+                         "(samples.raw_only in config.yaml)")
     rd.add_argument("--lr-reset", action="store_true",
                     help="restore the full learning rate by hand. The "
                          "plasticity controller does this on its own when "
