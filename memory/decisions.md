@@ -43,9 +43,19 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
   prompts from 32.5% to 18.1% repeated 8-grams, every 2nd step +0.003 and 12.5% (E57). REJECTED: a tie
   preference against the copy at free choices (no measurable effect, E57); leaving the first copy free (no
   change, E57). Arithmetic's free-running loop remains: the lane's own argmax line repeated (E56). The
-  `[adapted]` reading stays until raw greedy is nearly free of repetition. REJECTED (11-06): self-play in its
-  place, the model's own continuation against the real one (E58: little effect on loops, a quarter of the
-  reading speed); loop practice's held-out cost measured at ~0.0004 (E58).
+  `[adapted]` reading was to stay until raw greedy was nearly free of repetition. REJECTED (11-06): self-play in
+  its place, the model's own continuation against the real one (E58: little effect on loops, a quarter of the
+  reading speed); loop practice's held-out cost measured at ~0.0004 (E58). REVERSED (11-09): loop practice, off
+  from the next start (`training.loop_practice_every` 0, the author's change): its held-out cost grows with the
+  reading, ~+0.004 after 147M characters, wikipedia first (E61).
+- SETTLED (11-09): the model writes by sampling, temperature 0.5, in chat and in the sample log
+  (`decoding` in config.yaml, minagi/decode.py `Sampler`). Always-greedy writing was given up as a failed bet and
+  the established rules measured against it: 0.5 wrote text as predictable to GPT-2 Large as the real
+  continuation, half greedy's repetition, no loops; greedy + DRY 8 tied it on prose and lost on chess, spelling,
+  the sample prompts and copying (E62). REVERSED: greedy as the only way of writing, with the adaptation trace as
+  its guard. The sample log writes `[written]` (by `decoding`, random numbers fixed per prompt); `[raw]` plain
+  greedy only when `samples.readings` adds it. REJECTED: typical sampling as defined (+0.25 bits on new
+  material, arithmetic falls apart), anything drawn at temperature 1, DRY on top of sampling (E62).
 
 ## Learning rate and optimiser
 

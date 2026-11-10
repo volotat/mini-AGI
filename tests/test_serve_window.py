@@ -15,8 +15,8 @@ the prompt budget counts characters, and a Cyrillic letter is two bytes.
   window crossings, in English and in Cyrillic
 
   the reply is, character for character, what model.generate writes for the
-  same prompt and settings: when the window fills, both re-read the newest
-  half of the text from position 0
+  same prompt, decoding and random numbers: when the window fills, both
+  re-read the newest half of the text from position 0
 """
 import os
 import shutil
@@ -38,7 +38,6 @@ def check(name, cond, extra=""):
 
 tmp = tempfile.mkdtemp(prefix="minagi-serve-window-")
 try:
-    from minagi.config import get, load as load_cfg            # noqa: E402
     from minagi.create import create                           # noqa: E402
     from minagi.pool import PooledMLP                          # noqa: E402
     from minagi.recur import RecurCoder                        # noqa: E402
@@ -81,34 +80,30 @@ try:
 
     RecurCoder.forward = watched
 
-    # what stream picks, id by id (it imports pick_next when it runs; generate
-    # holds its own reference and is not affected)
+    # what stream picks, id by id: config.yaml's decoding, its random numbers
+    # fixed, so that model.generate given the same sampler writes the same
     picked = []
-    pick = D.pick_next
+    SEED = 1234
 
-    def recording(*a, **kw):
-        nxt = pick(*a, **kw)
-        picked.append(int(nxt[0, 0]))
-        return nxt
-
-    D.pick_next = recording
-
-    c = load_cfg()
-    strength = get(c, "decoding.adapt_strength", 2.5)
-    decay = get(c, "decoding.adapt_decay", 0.88)
+    def recording(sampler):
+        def pick(logits, history):
+            nxt = sampler(logits, history)
+            picked.append(nxt)
+            return nxt
+        return pick
 
     def by_serve(prompt, n):
         track.update(caches=None, stamps=[], bad=None)
         picked.clear()
-        for _ in serve.stream(prompt, n):
+        for _ in serve.stream(prompt, n,
+                              sampler=recording(D.sampler_from(seed=SEED))):
             pass
         return list(picked), track["bad"]
 
     def by_generate(prompt, n):
         ids = torch.tensor([tok.encode(prompt).ids[-BLOCK:]])
         with torch.no_grad():
-            out = model.generate(ids, n, temperature=0.0,
-                                 adapt_strength=strength, adapt_decay=decay)
+            out = model.generate(ids, n, sampler=D.sampler_from(seed=SEED))
         return out[0, ids.shape[1]:].tolist()
 
     for label, prompt in (

@@ -8,9 +8,10 @@ Nothing but the conversation. Generation streams a character at a time, so
 what you watch is the model writing rather than a spinner followed by a wall
 of text - at this size that difference is most of the information.
 
-Decoding is greedy and deterministic: the same conversation gives the same
-reply twice. The loops greedy decoding falls into are held off by the
-adaptation trace in minagi/decode.py, at the strength config.yaml sets.
+Each character is chosen by the rule config.yaml's `decoding` sets
+(minagi/decode.py's Sampler), read again at every reply. When the rule
+samples, as it does by default, the same conversation can be answered
+differently twice.
 
 IT LEARNS WHILE YOU TALK TO IT, and this CHANGES THE WEIGHTS ON DISK. The
 exchange joins one continuous stream and the model takes an optimiser step
@@ -251,14 +252,13 @@ def build_prompt(messages, budget, prime=""):
 
 
 @torch.no_grad()
-def stream(prompt, max_new):
-    from minagi.config import get as _g, load as _lc
-    from minagi.decode import pick_next
+def stream(prompt, max_new, sampler=None):
+    from minagi.decode import sampler_from
     from minagi.precision import amp
 
-    c = _lc()
-    strength = _g(c, "decoding.adapt_strength", 2.5)
-    decay = _g(c, "decoding.adapt_decay", 0.88)
+    # How each character is chosen: config.yaml's `decoding`, read again at
+    # every reply, so a change there reaches the next one.
+    sampler = sampler or sampler_from()
 
     model, tok = STATE["model"], STATE["tok"]
     device = next(model.parameters()).device
@@ -326,8 +326,8 @@ def stream(prompt, max_new):
                 # `moved` counts the ones copied onto it
                 yield {"swap": {"at": i, "moved": int(moved),
                                 "pool": resident_experts()}}
-        nxt = pick_next(logits[:, -1, :].float(), out, temperature=0.0,
-                        adapt_strength=strength, adapt_decay=decay)
+        nxt = torch.tensor([[sampler(logits[0, -1], out[0].tolist())]],
+                           device=device)
         out = torch.cat([out, nxt], dim=1)
         cur = nxt
         logits = None                       # spent; the next pass recomputes

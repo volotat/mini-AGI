@@ -19,8 +19,11 @@ Fields, where the log has them:
     grad_norm clipped train lr evidence_t evidence_n effect rate logit
     val val_se bits_per_char perplexity gap
     dom_<domain> ...            per-domain held-out, one column each
-    chess_legal_raw chess_legal_adapted   moves before an impossible one
-    repeats_pct swaps_per_chunk ram_hit_rate dropped_pct
+    chess_legal_raw chess_legal_adapted chess_legal_written
+                                moves before an impossible one
+    repeats_pct                 greedy's repeated 8-grams
+    written_repeats_pct         the written reading's, under its rule
+    swaps_per_chunk ram_hit_rate dropped_pct
     session                     which restart this record belongs to
 """
 import argparse
@@ -51,6 +54,7 @@ PATS = {
     "perplexity":  r"perplexity ([\d.]+)",
     "gap":         r"gap ([+-][\d.]+)",
     "repeats":     r"^repeats (\d+)% of 8-grams",
+    "written":     r"^written .*: repeats (\d+)% of 8-grams",
     "swaps":       r"([\d.]+) experts loaded\s*onto the card per chunk",
     "ram_hit":     r"RAM hit rate ([\d.]+)",
     "dropped":     r"capacity dropped ([\d.]+)% of routing",
@@ -85,9 +89,18 @@ def parse(path):
                 elif key in ("experts", "minutes"):
                     cur[key] = int(num(g[0]))
                 else:
-                    cur[{"bits": "bits_per_char", "repeats": "repeats_pct",
-                         "swaps": "swaps_per_chunk", "ram_hit": "ram_hit_rate",
-                         "dropped": "dropped_pct"}.get(key, key)] = num(g[0])
+                    field = {"bits": "bits_per_char", "repeats": "repeats_pct",
+                             "written": "written_repeats_pct",
+                             "swaps": "swaps_per_chunk",
+                             "ram_hit": "ram_hit_rate",
+                             "dropped": "dropped_pct"}.get(key, key)
+                    # The repeat lines come after held-out, which closed the
+                    # record, so they belong to the one just appended - put
+                    # on `cur`, they were dropped from every record.
+                    if key in ("repeats", "written") and rows and "step" not in cur:
+                        rows[-1][field] = num(g[0])
+                    else:
+                        cur[field] = num(g[0])
             # The per-domain line FOLLOWS held-out, so it has to be attached to
             # the record already appended rather than to `cur` - which is the
             # mistake the first version of this made, reporting zero domains.
@@ -107,7 +120,7 @@ def parse(path):
             # already appended. Only the chess prompt emits "legal moves",
             # so the label alone identifies it.
             if rows:
-                m = re.search(r"^\[(raw|adapted)\].*?(\d+) legal moves", line)
+                m = re.search(r"^\[(raw|adapted|written)\].*?(\d+) legal moves", line)
                 if m:
                     rows[-1][f"chess_legal_{m.group(1)}"] = int(m.group(2))
             # a record is complete once it has both a step and a held-out value

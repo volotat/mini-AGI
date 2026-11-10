@@ -1152,6 +1152,11 @@ def main():
         + ("Two readings of each prompt: `raw` is plain greedy with no guard "
            "at all, `adapted` is the same with the repetition trace on. "
            if "[adapted]" in best_b else
+           "Each prompt is written the way chat writes, by the rule the "
+           "header names"
+           + (", and `raw` beside it is plain greedy with no guard at all. "
+              if "[raw]" in best_b else ". ")
+           if "[written]" in best_b else
            "Each prompt is written plain greedy, with no guard at all. ")
         + f"The whole history is in [runs/samples.txt](runs/samples.txt).*\n\n"
         "```\n" + BAR + best_h + BAR + best_b.rstrip() + "\n```\n\n</details>"

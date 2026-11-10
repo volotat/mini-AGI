@@ -680,7 +680,137 @@ experts is a single-character forward with the vote preset, as in writing. The p
   sets together outgrow the card. 32 slots: 123 a held-out first chunk (61-275), 30 a second, 97 an enwik9
   piece - a character needs all 32, so every change of set is a new forward, as slow as this method. 48 slots:
   5.0, 1.0 and 4.3. 64 slots: 2.5, 1.0 and 2.1. A vote first holds 32 experts at the 6th character on average
-  (4-18).
+  (4-18). These forwards split one chunk's characters through the cache, so the work stays about the same: in
+  these CPU runs an extra forward cost 0.11-0.14 s against ~6 s for a whole 2,048-character one, ~3% for a
+  64-slot reading of a cold chunk. The GPU was not timed.
 Verdict: the issue is real and the published scores are optimistic, by ~0.008 nats/char on held-out and ~0.022
 bits/byte on cold enwik9 pieces; writing is unaffected. The fix is scoring, not training: a scoring forward
 routes each character among its causal set on a card of 48-64 slots of inference copies (0.3-0.4 GB in bf16).
+Not built: on 11-07 the author chose to keep one path for training and evaluation, which a per-position mask
+used only in scoring would split.
+
+**E60 a learned per-group rate, CPU testbed (2026-11-08).** A tiny RecurCoder (d_model 96, 8 -> 12 -> 16
+experts born at steps 1,000 and 2,000) read 3,000 steps of 8 x 256 characters from the training subjects, with
+a rate for every trunk tensor and every expert (its matrices, its router rows, its gate), Muon for matrices.
+A small net predicted each group's log-rate from the group's own state (age, update cosine, update/weight
+ratio, gradient norm, use, last rate) and was trained toward its own value plus 0.5 x the mean cosine between
+the group's move and the next 8 gradients (each on text not yet trained on). Held-out at step 3,000: one rate
+for everything 1.618 / 1.560 / 1.614 at 1e-3 / 3e-3 / 1e-2; trunk at 0.3x 1.677 / 1.641 at 3e-3 / 1e-2; learned
+2.008 from 3e-3, 1.946 from 1e-3. The controller sent every group to the same rate and drove it down - to
+1.5e-4 from one start, to its 1e-5 floor from the other - newborns included: the next gradients point against
+the last move more often than with it, so this signal only says "lower", everywhere. Verdict: next-gradient
+alignment is not a usable reward for per-group rates; it is short-horizon bias in its plainest form.
+- Rounds 2-4, same testbed. (2) The controller also read weight statistics (RMS, top singular value over
+  RMS·√dim, mean|w|/RMS, gradient and update over weight) and was trained by a paired perturbation: two copies
+  read the same batches, one with each group's log-rate +0.5 and the other -0.5 at random, compared on held-out
+  after 25-50 steps, the better copy kept. Every rate sank again (to 4e-5 and 3.7e-4); 1.593 and 1.574 at step
+  3,000. (3) The copies compared only after a 50-step tail at equal rates: 1.498 on seed 0 against 1.560, but
+  one shared rate replaying its trajectory scored 1.506 - the gain was a learned anneal - and seed 1 sank to
+  3e-5 (1.585 against 1.586). (4) Only the differences learned, the log-mean held at 3e-3: step 3,000 against
+  the constant rate, seeds 0-3: 1.561/1.560, 1.547/1.586, 1.555/1.590, 1.519/1.608 - three wins and a tie;
+  averaged over steps 2,000-3,000 +0.012 +/-0.015, not yet clear of noise. Where it differentiated (seeds 1, 3)
+  the trunk ran 1.3-5x the experts' rate and younger experts ran faster than the founders. Each step costs two
+  forwards and backwards; equal-compute comparisons not made.
+- Round 5, the follow-ups, 4 seeds each, against the constant 3e-3 (averaged over steps 2,000-3,000:
+  1.531/1.557/1.552/1.567). (a) A three-number rule in place of the net - trunk at k x the experts, a newborn
+  at (1 + m·e^(-age/tau)) x the founders - fitted by the paired copies: 1.579/1.558/1.595/1.524, the trunk
+  driven to its 0.05x bound. (b) Each expert scored by the held-out loss of the characters routed to it:
+  1.568/1.797/1.516/1.541, one seed sent an expert to 0.057 and broke. (c) The level from the run's own
+  controller (Plasticity, fed every 50 steps): rule 1.641/1.625/1.530/1.581, one rate 1.568/1.570/1.559/1.566 -
+  on 3,000 steps it only adds its warm-up and drift. (d) The rule paired one episode in four (1.25x compute):
+  1.503/1.515/1.518/1.503, all four ahead by ~0.04. But replaying (d)'s rule trajectory with nothing learned
+  scored 1.511/1.515/1.509/1.512 - the same - and the rule's final values held from step 0 scored ~2.0. What
+  it found is a schedule: the trunk eased from 1x to ~0.08x of the experts over the run (log k 0 -> -2.0 to
+  -2.7, steady), the experts held at 3e-3. Its newborn factor differed in sign between seeds (m from e^-1.3 to
+  e^2.3): no stable newborn signal. Equal compute by more steps was not a usable baseline: the constant rate
+  rises after ~2,500 steps (1.59 -> 1.97 by 6,000 in every seed).
+Verdict: a learned per-group rate adds nothing a schedule does not; the one result worth carrying is that on
+this testbed easing the trunk while the experts keep their rate beat one constant rate by ~0.04, which is an
+anneal confined to the trunk, untested against an anneal of everything and untested at scale.
+- Round 6, that test, 4 seeds, log-linear easing from 1x to a final factor over the 3,000 steps, averaged over
+  steps 2,000-3,000 (constant 1.552 mean): trunk only to 0.08x 1.519; experts only to 0.08x 1.539; every rate
+  to 0.08x 1.509; every rate to 0.3x 1.501 (step 3,000: 1.536 / 1.530 / 1.500 / 1.497). Easing everything
+  beats easing the trunk alone in every seed. Verdict: round 5's gain was an ordinary anneal; nothing on this
+  testbed favours a rate per part over one rate that eases.
+
+**E61 the training line's steps and the held-out rise under loop practice (2026-11-09, step 2,238,291, CPU, from
+runs/samples.txt and the E57/E58 A/B folders; nothing run on the card).**
+- The logged train loss steps at the two changes of what is read and nowhere else: within 60M characters either
+  side, 0.4990 -> 0.5270 at 2,329.0M (automatic shares begin) and 0.5261 -> 0.5585 at 4,067.6M (shares of
+  characters), while held-out held its course (0.6033 -> 0.5985; 0.5655 -> 0.5658). It is the mean over what the
+  steps read, and both changes moved the reading from low-loss or much re-read text (arithmetic and chess ~22% of
+  the characters each under equal visits, now 3% and 9%; self-knowledge ~9%, now 3%) towards wikipedia (~4%, now
+  22%; held-out ~0.87), chat and code. The line does not compare across those two points.
+- The logged held-out's local exponent was 0.08-0.135 from 650M to 3.2B, and the automatic shares left it there
+  (1,700-2,329M 0.102, 2,329-2,800M 0.107). Shares of characters about doubled wikipedia's reading, and its
+  start-of-session reading (the same 30 blocks every session) then fell 0.8731 -> 0.8593 in 363M characters,
+  against 0.8748 -> 0.8731 in the 263M before.
+- From the session of 11-06 13:50 (4,430.5M: loop practice every 8th step; reading 1,970-1,990 -> 1,780-1,860
+  char/s, as E57's arm) the start-of-session level rose at every start: 0.5632, 0.5640, 0.5651, 0.5661 (4,430.5M,
+  4,443.7M, 4,480.6M, 4,577.9M). Wikipedia 0.8593, 0.8639, 0.8698, 0.8778 (+0.0185, ~80% of the rise), chat
+  +0.003, the other six within 0.0015. Before it the level fell ~0.0007 per 100M characters; against that course
+  the cost by 4,577.9M is ~+0.004. The checks' own 8 blocks of each subject moved far less (wikipedia
+  0.8296 -> 0.8313), so the rise shows as steps at session starts, where the line is levelled to the 30 blocks,
+  and the rate controller, which reads only the checks, has barely seen it.
+- Both A/Bs show the same pattern, per subject over 120 blocks each: E57 practice8 against control, wikipedia
+  +0.0007 and chat +0.0007 of a +0.0003 mean; E58 control (practice) against none, wikipedia +0.0012 of +0.0004.
+  E57's training-loss gap was widening, +0.0069 +/-0.0036 per 10M characters (practice2 +0.0213 +/-0.0096): the
+  +0.0003 after 3M characters was the start of a cost that grows with the steps practised, not its size. Within
+  wikipedia the cost sits on blocks whose own text repeats: it correlates with a block's share of repeated
+  character 8-grams at +0.44 (practice8; +0.56 practice2), the more repetitive half carries +0.0013 against
+  +0.0001, and the worst blocks are lists (a disambiguation page's people, a dated list of treaties). Reading:
+  the practice teaches that a recurring span grows less likely, and the weights apply that to text whose
+  structure legitimately recurs.
+- Not separated from it: `pool.balance` 5e-5 -> 1.5e-4 from the 11-07 02:46 session, one session after the rise
+  began. The slower slope from ~3.5B predates loop practice (3,500-3,800M 0.076, 3,800-4,067M 0.021,
+  4,067-4,430M 0.062) and has no configuration change at its start; the controller's scale has eased from x0.0121
+  (10-29, when its floor went to x0.001) to x0.00705, and whether that costs is state.md's open question.
+Verdict: the shares are not the cause; they moved the training line and helped held-out. Loop practice is, by its
+timing, its subject pattern and its own two A/Bs. Proposed: `training.loop_practice_every` 0 from the next start,
+with the start-of-session levels showing whether and how fast the reading undoes it. A later attempt at loops
+needs a target relative to the real text (a copy held down only where the real text does not repeat) and an A/B
+long enough to show a trend (tens of millions of characters), not 3M.
+
+**E62 how the model should write: the established samplers measured (2026-11-09, step 2,239,774, 423 experts,
+on the card while the run was stopped; tools/write_meter.py, runs/sampling/).** Asked for after always-greedy
+writing was judged a failed bet: compare the established ways of choosing a character and keep the most coherent.
+- Method: held-out openings (512 characters of real text, then 256 written beside the real continuation; an
+  arithmetic opening ends at a problem's "= ", a chess one a few moves into a game) and the run's 9 sample
+  prompts; every setting on the same prompts with the same random numbers. Measured: repeated 8-grams, loops,
+  words found nowhere in the subject's text, arithmetic lines right, legal chess moves, and GPT-2 Large's bits a
+  character on the written text beside the real continuation of the same prompt - whole, and over new material
+  only (characters inside an 8-gram already seen left out, in both texts), because a repeated span is easy to
+  predict and the whole-text score rewards repeating. (GPT-2 XL is not in the local cache; Large is the usual
+  judge in the decoding papers.) One forward per character at batch 1 writes ~35 characters a second on the card
+  however many processes share it; batching streams would change which experts a forward admits.
+- Round 1, 16 settings, 4 openings a subject (seed 20261109; real prose 1.029 bits, 7.9% repeated), whole / new
+  material against real: greedy -0.013 / +0.250, 24.8% repeated, loops in 5 of 32 openings; greedy + DRY
+  (0.8 x 1.15^(length - 8), the token defaults in characters) +0.052 / +0.132, 12.7%, none; greedy + the
+  adaptation trace (2.5, 0.88) +0.185 / +0.327, 19.0%, 7 of 9 sums right; temperature 0.7 +0.170 / +0.237;
+  min-p 0.1 +0.180 / +0.217; mirostat 0.8 +0.200 / +0.320; top-p 0.9 +0.281; every rule drawing at temperature 1
+  +0.33 to +0.64 (top-k 40 the worst, 8.1% non-words). Typical 0.2 as the paper defines it (the most typical
+  character kept, not the likeliest) +0.341 / +0.377, 19 of 31 sums: where the model is unsure it passes over
+  the likeliest character every time.
+- Round 2, 8 finalists on fresh openings (seed 20261110, 6 a subject; real prose 0.999 bits, 7.5% repeated), and
+  temperatures 0.4 and 0.6 on the same prompts after it. Whole / new material against real, repeated 8-grams,
+  loops of 48 openings, legal chess moves, non-words:
+  greedy -0.155 / +0.007, 27.4%, 6, 12.2, 2.0%; greedy + DRY 32 -0.132 / +0.084, 25.6%, 0, 12.2, 3.8%;
+  greedy + DRY 16 -0.099 / -0.099, 20.7%, 0, 12.2, 2.6%; greedy + DRY 8 -0.070 / -0.043, 15.2%, 0, 12.2, 2.2%;
+  temperature 0.4 -0.033 / +0.071, 15.5%, 1, 16.8, 1.4%; temperature 0.5 -0.006 / +0.038, 13.9%, 0, 16.3, 1.8%;
+  temperature 0.6 +0.038 / +0.112, 14.1%, 1, 13.3, 2.3%; temperature 0.5 + DRY 16 +0.044 / +0.062, 12.9%, 0;
+  typical 0.2 +0.269 / +0.250; typical 0.2 + DRY 16 +0.343 / +0.283, 4.8% non-words. Every setting answered the
+  problem an arithmetic opening posed right 5 times of 6. DRY on top of sampling costs: temperature 0.5 + DRY 16
+  against 0.5 alone +0.050 +/-0.022 whole. The loops at 0.4 and 0.6 are one page's closing tags (`</page>`
+  again and again) in the same wikipedia opening; 0.5 passed it.
+- Greedy + DRY 8 against temperature 0.5, paired on the same prompts: new material -0.081 +/-0.060 bits (DRY
+  ahead, not significant); an agent's blind reading of the 31 pairs whose texts differ (letters shuffled, the
+  key read after the verdicts were written) 14 to 9 for DRY with 8 even, sign test p 0.40 - DRY ahead on code
+  and stories, temperature on assistant chat and wikipedia. Temperature 0.5 ahead on chess (16.3 against 12.2
+  legal moves), spelling, and the sample prompts: asked what it is, it describes itself as a model that keeps
+  learning from what it reads, where greedy and DRY write the same garble; its arithmetic lines are varied and
+  mostly right, where DRY walks one digit through the same sum. DRY's cost is copying: it charges any repeat of
+  8 characters or more, the prompt's included, so a name or a code line a reply ought to repeat comes out bent
+  (a "callback" written "callbacK").
+Verdict: temperature 0.5 is `decoding` from 11-09 (config.yaml), for chat and for the sample log, which writes
+it with its random numbers fixed per prompt (`samples.readings`; `raw` adds plain greedy). DRY and the other
+rules stay in minagi/decode.py's Sampler; the adaptation trace is no longer used for writing.

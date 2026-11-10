@@ -380,13 +380,17 @@ class RecurCoder(nn.Module):
 
     def generate(self, idx, max_new_tokens, temperature=0.0, top_k=0,
                  top_p=1.0, collect=False, rep_penalty=1.0,
-                 no_repeat_ngram=0, adapt_strength=2.5, adapt_decay=0.88):
+                 no_repeat_ngram=0, adapt_strength=2.5, adapt_decay=0.88,
+                 sampler=None):
         # The prompt's forward admits the experts its characters ask for most,
         # and then every character of the reply is a forward of its own that
         # adds its requests to the vote and routes among what the prompt and
         # the reply so far have voted for. When the attention window fills,
         # the context is re-read from position 0 - a new text, whose vote is
         # the re-read context's.
+        #
+        # `sampler`, a minagi.decode.Sampler, chooses each character in place
+        # of the settings before it - one stream, so one row of `idx`.
         self.eval()
         cfg = self.cfg
         caches = self.empty_caches()
@@ -404,10 +408,14 @@ class RecurCoder(nn.Module):
             offset += cur.shape[1]
             if collect and extra is not None:
                 steps_log.append(float(extra["steps"][0, -1]))
-            nxt = pick_next(logits[:, -1, :].float(), out, temperature, top_k,
-                            top_p, rep_penalty, no_repeat_ngram,
-                            adapt_strength=adapt_strength,
-                            adapt_decay=adapt_decay)
+            if sampler is not None:
+                nxt = torch.tensor([[sampler(logits[0, -1], out[0].tolist())]],
+                                   device=out.device)
+            else:
+                nxt = pick_next(logits[:, -1, :].float(), out, temperature,
+                                top_k, top_p, rep_penalty, no_repeat_ngram,
+                                adapt_strength=adapt_strength,
+                                adapt_decay=adapt_decay)
             out = torch.cat([out, nxt], dim=1)
             cur = nxt
         return (out, steps_log) if collect else out

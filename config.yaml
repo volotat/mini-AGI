@@ -195,7 +195,7 @@ training:
   # 12.5% for +0.003. The effect grows with the steps practised, so the run
   # keeps gaining at 8. It does not touch the arithmetic lane's loop, a tie
   # the copy wins at a free choice (E56).
-  loop_practice_every: 8
+  loop_practice_every: 0
   loop_practice_lambda: 0.5
   loop_practice_reps: 6
   # SELF-PLAY (minagi/practice.py): after every `self_play_every` reading
@@ -274,23 +274,26 @@ data:
   lane_weights: {}
 
 decoding:
-  # Generation is greedy - no random numbers - so two samples taken at the
-  # same point in training are the same text. What holds off the loops greedy
-  # decoding usually falls into is a per-character trace that rises when a
-  # character is used and decays after.
-  adapt_strength: 2.5     # logits of suppression for a character just used
-  adapt_decay: 0.88       # half-life of 5.4 characters; 0 disables it
-
-  rep_penalty: 1.0        # the weaker alternative, off at 1.0
+  # How chat (serve.py) and the sample log's `written` reading choose each
+  # character: the settings of minagi/decode.py's Sampler, each named there,
+  # and whatever is left out is off - no temperature is greedy. Of the
+  # established rules measured on held-out openings (E62 in
+  # memory/experiments.md), temperature 0.5 alone wrote text as predictable
+  # to an outside model as the real continuation, with no loops; greedy
+  # repeated 27% of its 8-grams to the real text's 7.5% and ended one
+  # opening in eight in a loop, temperature 0.5 repeated 14% and looped in
+  # none.
+  temperature: 0.5
 
 samples:
   # What a training session writes to its sample log (runs/samples.txt) at
-  # every check: each of train.py's SAMPLE_PROMPTS, one per subject, written
-  # on greedily. `--sample-every` sets how often, `--sample-log` where.
+  # every check: each of train.py's SAMPLE_PROMPTS, one per subject.
+  # `--sample-every` sets how often, `--sample-log` where.
   chars: 320              # characters written after each prompt
-  raw_only: true          # true writes only the plain greedy reading (`raw`);
-                          # false adds the `adapted` one, written with the
-                          # adaptation trace of `decoding` above
+  readings: [written]     # written: as chat writes, by `decoding` above,
+                          # its random numbers fixed per prompt; adding raw
+                          # writes plain greedy as well, whose repeat rate is
+                          # a fact about the model rather than about a rule
 
 plots:
   enabled: true           # redraw the graphs whenever the sample log grows

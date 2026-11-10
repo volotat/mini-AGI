@@ -501,3 +501,31 @@ remove the newborn rate, newborn gate as a share of parents', and Muon (Liu et a
   over all 8 subjects, nearly all in each block's first 2,048 characters, where the vote starts empty (E59).
   Writing is not affected. Proposed: causal scoring in every evaluation, then a correction of the published
   numbers; training keeps the window's vote, since nothing learns through admission.
+- 11-07: decided not to fix #33: one path for training and evaluation is kept, which a per-position expert mask
+  used only in scoring would split (E59). The README now says the scores are slightly optimistic, at the top of
+  Benchmarks and under the enwik9 table.
+- 11-07: issue #17 (serve.py stops at its banner on a weights directory no paged pool has saved) is still
+  present: a fresh create() directory has no `paged` flag, `_load_dir` builds the in-memory pool for it, and
+  that pool has no `vram_params`. Loading it through the paging path instead served it, chips included.
+
+## 2026-11-09 - the training line's steps, loop practice's growing cost
+
+- 11-09: the logged train loss steps up at exactly the two changes of the reading mix, 2,329.0M (automatic
+  shares) and 4,067.6M (shares of characters), +0.028 and +0.032, with held-out unmoved at both: the mix moved
+  from arithmetic, chess and self-knowledge towards wikipedia, chat and code, so the line's level changed, not
+  the model. The shares kept the held-out slope (~0.10) and sped up wikipedia (E61).
+- 11-09: since loop practice began (11-06 13:50, 4,430.5M) the start-of-session held-out rose 0.5632 -> 0.5661 in
+  147M characters, ~80% of it wikipedia (+0.0185), the subject both practice A/Bs put first; the cost grows with
+  the steps practised, as E57's widening training gap showed, and sits on wikipedia's repetitive pages (lists).
+  Proposed: practice off from the next start (E61).
+
+## 2026-11-09 - writing by sampling
+
+- 11-09: loop practice off from the next start, the author's change after E61.
+- 11-09: always-greedy writing was given up as a failed bet, and the established rules were measured against it on
+  held-out openings with GPT-2 Large judging (E62). Temperature 0.5 became the default for chat and the sample
+  log: as predictable to the judge as the real text, 14% repeated 8-grams to greedy's 27%, no loops. Greedy + DRY
+  tied it on prose and lost on chess, spelling, the sample prompts and copying; typical sampling as defined and
+  everything drawn at temperature 1 were well behind. tools/write_meter.py measures any rule; the sample log's
+  header names the rule its `[written]` reading follows; tools/export_history.py, which had dropped every repeat
+  rate the log carried, now records them.

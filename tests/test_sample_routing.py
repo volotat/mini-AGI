@@ -51,7 +51,7 @@ try:
     model, cfg, pool, man = train.build_paged(wdir, "cpu", read_only=True)
     tok = ByteTokenizer()
     dev = torch.device("cpu")
-    RAW = [("raw", dict(rep_penalty=1.0, adapt_strength=0.0))]
+    RAW = [("raw", {})]
 
     def admitted():
         return tuple(sorted(pool._admitted))

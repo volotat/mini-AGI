@@ -27,6 +27,13 @@ auto regions). timeline.md has the run's history session by session.
 
 - 2026-11-06 (agent, uncommitted): loop practice on, `training.loop_practice_every` 8 (E57), from the run's next
   start; chat learning takes the same steps. The run was stopped at step 2,163,711 for the A/B.
+- 2026-11-09: loop practice's held-out cost grows with the reading. The start-of-session level rose 0.5632 ->
+  0.5661 over the 147M characters since it began (wikipedia +0.0185), ~+0.004 against the course before it.
+  The training line's two steps (2,329.0M, 4,067.6M) are changes of the reading mix, not of the model (E61).
+  The author turned practice off (`training.loop_practice_every` 0) from the next start.
+- 2026-11-09 (agent, uncommitted): the model writes at temperature 0.5 (`decoding`, E62), in chat from serve's
+  next reply and in the sample log from the run's next start, which writes `[written]` alone
+  (`samples.readings`); the run was stopped for the measurements at step 2,239,774.
 
 - d_model 512, 8 heads, 2 dense prelude blocks (SwiGLU d_ff 1408), 1 weight-shared recurrent block applied
   up to 24 rows (min 1), PonderNet halting (halt_prior 0.072, ponder_beta 0.01, halt_thresh 0.9),
@@ -139,8 +146,15 @@ the share of its text seen.
   characters after it. Still present on 11-07: scored causally (each character among the top 32 of the vote
   up to it, as writing does), held-out is +0.0084 +/-0.0014 nats/char above the published way over all 8
   subjects, nearly all of it in each block's first 2,048 characters, and cold enwik9 pieces +0.022 bits/byte
-  (E59; E48 before it). Writing is not affected. Proposed, not built: causal scoring in every evaluation on a
-  scoring card of 48-64 slots, training's rule unchanged, then a correction of the published numbers.
+  (E59; E48 before it). Writing is not affected. Not to be fixed (decided 11-07): one path for training and
+  evaluation is kept, which a per-position mask used only in scoring would split. The README says so instead: a
+  note at the top of Benchmarks and a line under the enwik9 table, both outside the regenerated regions.
+- Issue #17: serve.py stops at its startup banner on a weights directory no paged pool has saved yet - a fresh
+  one from create(), as a training run without --save leaves it. Its manifest has no `paged` flag, so
+  `_load_dir` builds the in-memory pool, which has no `vram_params` (nor `slots`, so no expert chips). Still
+  present on 11-07, reproduced on the CPU. Directories the run has saved carry the flag and are unaffected.
+  Proposed, not built: `_load_dir` reads every weights directory through the paging path, as training does,
+  unless a caller passes paged=False; only `_load_dir` reads the flag.
 - Held-out as measured is the model's training loss: 0.5658 at step 1,983,939 is halting-weighted
   cross-entropy 0.5588 plus the 0.01 KL halting term 0.0069; the returned logits score 0.5572 (E50). Reporting
   cross-entropy would be a measurement correction (conventions.md), not a gain; lowering `ponder_beta` or

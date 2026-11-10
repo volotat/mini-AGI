@@ -86,8 +86,13 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
   reading step, one more step on a real span of the window written out again; each copy is held to at most
   lambda times as likely as the one before (E57). **loop meter** (`tools/loop_meter.py`): greedy writing against
   real text on fixed openings, the sample prompts, the self-reinforcement curve and copying at open choices.
-- **adaptation trace** (`decoding.adapt_strength` 2.5, `decoding.adapt_decay` 0.88): the decoder's loop guard; what
-  was just written is suppressed, and the suppression fades (adaptation.md). Decoding is greedy: no random numbers.
+- **adaptation trace** (`adapt_strength`, `adapt_decay`, minagi/decode.py): greedy writing's loop guard until 11-09;
+  what was just written is suppressed, and the suppression fades (adaptation.md). Not used for writing since.
+- **decoding / the Sampler** (`decoding` in config.yaml, minagi/decode.py `Sampler`): how chat and the sample log
+  choose each character - temperature 0.5 since 11-09 (E62); greedy before. **DRY**: a charge on the character
+  that would continue a repeat of `dry_allowed` characters or more, growing with the repeat's length.
+  **write meter** (`tools/write_meter.py`): any rule's text against the real text on held-out openings, judged
+  by GPT-2 Large over the whole text and over its new material only.
 - **the controller / plasticity / the governor**: the learning-rate controller (`minagi/plasticity.py`), run through
   `minagi/governor.py` by everything that learns. **scale** ("rate x0.012"): its multiplier on the base rate 3e-4,
   between `FLOOR` 0.001 (0.01 until 2026-10-29) and `CEIL` 1; printed to three figures since then (x0.00951).
@@ -156,10 +161,12 @@ repeats 26% of 8-grams, greedy with no guard
 6. held-out at the start evaluation's level, +/- its standard error, in bits and as perplexity; gap = held-out minus
    the train loss above; level = the mean per-subject level.
 7. each subject, at the same level.
-8. the share of repeated 8-grams in the `[raw]` samples.
+8. the share of repeated 8-grams in the `[raw]` samples, when there are any.
+9. (since 11-09) `written <rule>: repeats N% of 8-grams`: the same for the `[written]` samples, naming the rule.
 
-Then the samples: for each prompt, `[raw]` (greedy, no guard) and `[adapted]` (with the adaptation trace), each with
-its own repeated-8-gram share; `samples.raw_only` (config.yaml, since 2026-11-06) writes `[raw]` alone, and
+Then the samples: for each prompt, each reading `samples.readings` names - `[written]` by `decoding`, its random
+numbers fixed per prompt, and `[raw]` plain greedy - each with its own repeated-8-gram share. Before 11-09 the
+readings were `[raw]` and `[adapted]` (greedy with the adaptation trace), `[raw]` alone from 11-06;
 `samples.chars` sets the length, 140 by default. Older checks lack some of these fields; `minagi/heldout.py` `parse_log` reads every
 format the log has had.
 

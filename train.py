@@ -1537,7 +1537,7 @@ def cmd_read(args):
                                   level=(float(np.mean(list(level.values())))
                                          if level and v_ is not None
                                          else None),
-                                  logits=logits)
+                                  logits=logits, rule=_rule(args))
                     rp = pool.report()
                     print(f"    samples -> {args.sample_log}"
                           + (f"  train {float(np.mean(recent)):.4f}"
@@ -1731,7 +1731,7 @@ def cmd_read(args):
                       opt.param_groups[-1]["lr"], info["characters"],
                       ctx_now, ctx_max, context_gain(), read_rate,
                       float(np.mean(grads)) if grads else None, args.clip,
-                      write_rate=write_rate)
+                      write_rate=write_rate, rule=_rule(args))
         print(f"  final samples in {args.sample_log}")
 
     if args.save:
@@ -1794,25 +1794,40 @@ SAMPLE_PROMPTS = [
 ]
 
 
-@torch.no_grad()
+SAMPLE_READINGS = ("written", "raw")
+
+
+def _readings(v):
+    """--sample-readings, or samples.readings in config.yaml: a list, or
+    names separated by commas, each one of SAMPLE_READINGS."""
+    names = [r.strip() for r in (v.split(",") if isinstance(v, str) else v)
+             if str(r).strip()]
+    bad = [r for r in names if r not in SAMPLE_READINGS]
+    if bad or not names:
+        raise argparse.ArgumentTypeError(
+            f"sample readings {names}: each one of {', '.join(SAMPLE_READINGS)}")
+    return names
+
+
 def _sample_variants(args):
     """
-    Which readings of each prompt to write down.
+    Which readings of each prompt to write down, each a label and the
+    Sampler settings (minagi/decode.py) it is written with:
 
-    RAW first, always. It is the only one that says what the model predicts,
-    and it is the one whose repeat rate is a fact about the model rather than
-    about the decoding rule.
-
-    --sample-raw-only, or samples.raw_only in config.yaml, drops the guarded
-    reading, for when the raw text is good enough that the guard is no longer
-    telling you anything.
+      written  as chat writes: config.yaml's `decoding`, as it was when the
+               run started
+      raw      plain greedy, no rule of any kind - the argmax trajectory, and
+               the one whose repeat rate is a fact about the model rather
+               than about a rule
     """
-    v = [("raw", dict(rep_penalty=1.0, adapt_strength=0.0))]
-    if not getattr(args, "sample_raw_only", False):
-        v.append(("adapted", dict(rep_penalty=args.rep_penalty,
-                                  adapt_strength=args.adapt_strength,
-                                  adapt_decay=args.adapt_decay)))
-    return v
+    rules = {"written": dict(args.decoding), "raw": {}}
+    return [(r, rules[r]) for r in args.sample_readings]
+
+
+def _rule(args):
+    """How the `written` reading is written, in a line for the log."""
+    from minagi.decode import Sampler
+    return Sampler(**args.decoding).describe()
 
 
 def repeat_rate(s, n=8):
@@ -1893,42 +1908,25 @@ def sample_now(model, tok, device, n_new=140, variants=None):
     """
     What the model says right now, on one prompt from each domain.
 
-    TWO readings of every prompt, because neither alone is honest:
+    Each reading (_sample_variants: a label and its Sampler settings) is
+    written by a Sampler whose random numbers are fixed by the prompt, so a
+    prompt draws the same numbers at every check and two checks differ by the
+    model, not by their luck. A greedy reading draws none.
 
-      raw       plain greedy, no guard of any kind. This is what the model
-                actually predicts - the true argmax trajectory - and the only
-                text here that can be reasoned from about the MODEL.
-      adapted   the same, with the adaptation trace holding off loops. Easier
-                to read, and partly written by the decoding rule: instrumented
-                character by character, adaptation overruled the model on 28 of
-                72 choices, so more than a third of that text is the guard
-                talking rather than the model.
-
-    Where the two agree, the guard is doing nothing and the model stands on its
-    own. Where they diverge is exactly where it is falling into a hole - a
-    signal that was invisible while only the guarded text was kept.
-
-    Nothing draws a random number, and not for reproducibility: CUDA does not
-    give that anyway. Temperature would make the text look better by rolling
-    dice against the model's own prediction, which is a different thing from
-    the model being right. The repeat rate on the RAW reading is the number to
-    drive down, and only a better model can drive it.
-
-    Each variant starts at position 0, so the second reads the prompt exactly
+    Each reading starts at position 0, so the second reads the prompt exactly
     as the first did, and each character of either reply admits the experts
     it asks for.
     """
-    from minagi.decode import pick_next
+    from minagi.decode import Sampler
     if variants is None:
-        variants = [("raw", dict(rep_penalty=1.0, adapt_strength=0.0)),
-                    ("adapted", dict(rep_penalty=1.0, adapt_strength=2.5,
-                                     adapt_decay=0.88))]
+        variants = [("raw", {})]
     was_training = model.training
     model.eval()
     out = []
-    for name, prompt in SAMPLE_PROMPTS:
+    for k, (name, prompt) in enumerate(SAMPLE_PROMPTS):
         texts = []
         for label, kw in variants:
+            pick = Sampler(seed=k, **kw)
             ids = list(tok.encode(prompt).ids)[-model.cfg.block:]
             cur = torch.tensor([ids], device=device)
             caches = model.empty_caches()
@@ -1948,12 +1946,9 @@ def sample_now(model, tok, device, n_new=140, variants=None):
                 with torch.no_grad():
                     logits, _ = model(cur, caches=caches, pos_offset=off)
                 off += cur.shape[1]
-                nxt = pick_next(logits[:, -1, :].float(),
-                                torch.tensor([ids + got], device=device),
-                                temperature=0.0, **kw)
-                t = int(nxt[0, 0])
+                t = pick(logits[0, -1], ids + got)
                 got.append(t)
-                cur = nxt
+                cur = torch.tensor([[t]], device=device)
             texts.append((label, tok.decode(got)))
             del caches
         out.append((name, prompt, texts))
@@ -2055,7 +2050,7 @@ def write_samples(path, step, chars, minutes, samples, val=None, se=None,
                   per_domain=None, experts=None, train=None, lr=None,
                   corpus=None, context=None, ceiling=None, gain=None,
                   rate=None, gnorm=None, clip=None, plast=None,
-                  write_rate=None, level=None, logits=None):
+                  write_rate=None, level=None, logits=None, rule=None):
     with open(path, "a", encoding="utf-8", errors="replace") as f:
         f.write(f"\n{'=' * 78}\n")
         # How much has been read, against how much there is. A bare count of
@@ -2159,6 +2154,15 @@ def write_samples(path, step, chars, minutes, samples, val=None, se=None,
         if raw:
             f.write(f"repeats {sum(repeat_rate(t) for t in raw)/len(raw):.0%} "
                     f"of 8-grams, greedy with no guard\n")
+        # The same for the `written` reading, which is the rule's as much as
+        # the model's - so its own line, saying the rule, and not the line
+        # above, whose history is greedy's alone.
+        written = [t for _, _, ts in samples if not isinstance(ts, str)
+                   for lab, t in ts if lab == "written"]
+        if written:
+            f.write(f"written {rule or 'as chat writes'}: repeats "
+                    f"{sum(repeat_rate(t) for t in written)/len(written):.0%}"
+                    f" of 8-grams\n")
         f.write(f"{'=' * 78}\n")
         for name, prompt, texts in samples:
             f.write(f"\n--- {name} ---\n")
@@ -2576,15 +2580,15 @@ def main():
                     default=_cfg(_c, "growth.max_disk_gb", 16.0),
                     help="the pool may not grow past this many GB of expert "
                          "files; 0 means no limit")
-    rd.add_argument("--adapt-strength", type=float,
-                    default=_cfg(_c, "decoding.adapt_strength", 2.5),
-                    help="logits of suppression for a character just used; "
-                         "0 disables the adaptation trace")
-    rd.add_argument("--adapt-decay", type=float,
-                    default=_cfg(_c, "decoding.adapt_decay", 0.88))
-    rd.add_argument("--rep-penalty", type=float,
-                    default=_cfg(_c, "decoding.rep_penalty", 1.0),
-                    help="the older, weaker loop guard; off by default")
+    # How the sample log's `written` reading chooses its characters - the
+    # same settings chat writes with - checked here, so a name in the file
+    # that is no setting stops the run at its start rather than at its first
+    # sample.
+    from minagi.decode import settings_from as _decoding
+    try:
+        rd.set_defaults(decoding=_decoding(_c))
+    except ValueError as e:
+        raise SystemExit(str(e))
     rd.add_argument("--plots", dest="plots", action="store_true",
                     default=_cfg(_c, "plots.enabled", True),
                     help="redraw runs/training_progress.png every time the "
@@ -2600,11 +2604,13 @@ def main():
                          "the run has got to. A TRAILING span, not a fixed "
                          "start: `since 40` was set at 60M read and by 189M "
                          "it was showing the whole history again")
-    rd.add_argument("--sample-raw-only", action="store_true",
-                    default=bool(_cfg(_c, "samples.raw_only", False)),
-                    help="write only the unguarded greedy reading of each "
-                         "prompt, not the adapted one as well "
-                         "(samples.raw_only in config.yaml)")
+    rd.add_argument("--sample-readings", type=_readings,
+                    default=_readings(_cfg(_c, "samples.readings",
+                                           ["written"])),
+                    help="the readings of each sample prompt to write, "
+                         "separated by commas: written, as chat writes "
+                         "(config.yaml's decoding), and raw, plain greedy "
+                         "(samples.readings in config.yaml)")
     rd.add_argument("--lr-reset", action="store_true",
                     help="restore the full learning rate by hand. The "
                          "plasticity controller does this on its own when "
