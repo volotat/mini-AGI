@@ -101,13 +101,16 @@ Grouped by topic. Where a word changed meaning, the old meaning is given with it
 
 - **lane**: a top-level folder of `data/train`, read as one stream (8 in the first pass). **subject**: a folder of
   `data/val`, scored as one; a lane feeds one or more subjects (chat feeds chat and chat_hermes).
-- **visit**: one passage from one lane: a file drawn uniformly at random, a random offset, then up to 32,768
-  characters (`data.passage`, 16 chunks), fewer when the file is shorter (a short file is read whole from its start).
-  **window / context**: the 4,096 characters attention reaches back over (`context_now`); within a visit it moves a
-  chunk at a time, and it is empty at each visit's start.
+- **visit**: one passage from one lane, 32,768 characters (`data.passage`, 16 chunks): a file drawn uniformly at
+  random, from a random offset when it is longer than the passage; a shorter one is read from its start and followed
+  by more of the lane's files, drawn the same way, each joined to the one before by `<|endoftext|>` (none added
+  after a file that already ends in one) until the passage is full. Until 11-10 a visit ended with its file, so the
+  lane changed after nearly every document (E63). **window / context**: the 4,096 characters attention reaches back
+  over (`context_now`); within a visit it moves a chunk at a time, across the joins, and it is empty at each visit's
+  start.
 - **share**: a lane's share of the CHARACTERS read, set by `minagi/lanes.py`. worth = the sum over its subjects of
   |alpha| L / D, shares within [1/4, 3] of an even share, moving at most 5% a check, visits by smooth weighted
-  round-robin in characters (**credit**): a lane of long files is visited less often. Shares were of visits until
+  round-robin in characters (**credit**): a lane whose visits read more is visited less often. Shares were of visits until
   11-03 (E47).
 - **self-knowledge**: `data/train/self-knowledge`, the repository's own source and docs plus generated answers about
   the model (`tools/rebuild_self_knowledge.py`, `corpora/self_knowledge.yaml`); rebuilt by hand, with no run training.

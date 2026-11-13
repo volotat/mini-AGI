@@ -2,7 +2,7 @@
 """
 How long a subject is read for before the next one: train.py's
 _visit_chunks, which cmd_read reads its visits by - --passage characters of
-one file, a chunk a step, and never less than one full window.
+one subject, a chunk a step, and never less than one full window.
 
 What these tests hold it to:
   a visit is the passage in chunks, rounded up, so the number in the config
@@ -11,8 +11,8 @@ What these tests hold it to:
   one read
   never less than one window, or the window never fills and the model reads
   with less context than it has
-  at this run's settings a visit is 65,536 characters: 32 chunks of 2,048,
-  16 windows of 4,096
+  at this run's settings a visit is 32,768 characters: 16 chunks of 2,048,
+  8 windows of 4,096
   cmd_read reads its visits through it
 """
 import inspect
@@ -42,8 +42,8 @@ check("...rounded up when the passage is not whole chunks",
 check("never less than one full window",
       v(32768, 2048, 4096) == 16 and v(4097, 2048, 2048) == 3
       and v(4096, 512, 1) == 8)
-check("at this run's settings: 32 chunks of 2,048, 16 windows of 4,096",
-      v(4096, 2048, 65536) == 32)
+check("at this run's settings: 16 chunks of 2,048, 8 windows of 4,096",
+      v(4096, 2048, 32768) == 16)
 
 src = inspect.getsource(T.cmd_read)
 check("cmd_read reads its visits through it",

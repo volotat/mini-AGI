@@ -261,7 +261,8 @@ data:
 
   # Each sub-folder of `train` is a subject, and reading rotates between them.
   # A window never spans two subjects, but a subject may take several in a row.
-  passage: 32768          # characters read from one file before moving on
+  passage: 32768          # characters read from one subject before moving on:
+                          # a file, or files joined by <|endoftext|>
 
   # How the reading is shared between subjects, in characters. auto: each
   # subject's share follows where reading still lowers held-out most, read off

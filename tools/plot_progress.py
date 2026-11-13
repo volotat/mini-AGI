@@ -145,11 +145,12 @@ def main():
     t = np.array([r.get("train", np.nan) for r in rows], float)
     p.plot(x, t, lw=1, color="#c0c0c0", label="train")
     p.fill_between(x, v - se, v + se, color="#2b7bba", alpha=0.18)
-    p.plot(x, v, lw=1.8, color="#2b7bba", label="held-out")
+    p.plot(x, v, lw=1.3, color="#2b7bba", label="held-out", zorder=4)
     ok = ~np.isnan(v)
     if ok.any():
         i = int(np.nanargmin(v))
-        p.plot(x[i], v[i], "o", ms=6, color="#d62728", zorder=5)
+        # under the held-out line, so the newest stretch of the curve shows
+        p.plot(x[i], v[i], "o", ms=6, color="#d62728", zorder=3)
         p.annotate(f"best {v[i]:.4f}", (x[i], v[i]), textcoords="offset points",
                    xytext=(6, 10), fontsize=9, color="#d62728")
     if not a.linear:

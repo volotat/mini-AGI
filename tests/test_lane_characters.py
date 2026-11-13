@@ -3,10 +3,10 @@
 What train.py reads of each subject follows the shares in characters.
 
   two subjects at equal fixed shares, one of long files and one of short
-  ones: a visit to the first reads a whole passage, a visit to the second a
-  file a tenth as long. train.py reads about as many characters of each -
-  the short one is visited about ten times as often - and saves the lane
-  state as characters, which a resume carries on from
+  ones: a visit to the first reads a passage of one file, a visit to the
+  second a passage of its files joined. train.py reads about as many
+  characters of each, and saves the lane state as characters, which a
+  resume carries on from
 """
 import json
 import os
@@ -72,9 +72,24 @@ try:
           "long files as of one of files a tenth as long",
           0.4 < share < 0.6,
           f"long {read.get('long', 0):,.0f}, short {read.get('short', 0):,.0f}"
-          f" ({passage:,} and {short_len} characters a visit)")
+          f" (short files of {short_len} characters)")
     check("...and saves its lane state as characters",
           lanes.get("unit") == "characters", str(lanes.get("unit")))
+    visits = []
+    with open(os.path.join(tmp, "loss.jsonl")) as f:
+        for line in f:
+            d = json.loads(line)
+            if d["j"] == 0:
+                visits.append([d["lane"], 0, len(d.get("files", []))])
+            if visits:
+                visits[-1][1] += 1
+    short_visits = [v for v in visits[:-1] if v[0] == "short"]
+    check("a visit to the subject of short files reads a whole passage of "
+          "them, joined",
+          short_visits and all(n == passage // 64 and k > 1
+                               for _, n, k in short_visits),
+          f"{len(short_visits)} visits, steps {sorted({n for _, n, _ in short_visits})}, "
+          f"files {sorted({k for _, _, k in short_visits})}")
 
     before = dict(read)
     r2, man2 = run(60000)

@@ -814,3 +814,167 @@ writing was judged a failed bet: compare the established ways of choosing a char
 Verdict: temperature 0.5 is `decoding` from 11-09 (config.yaml), for chat and for the sample log, which writes
 it with its random numbers fixed per prompt (`samples.readings`; `raw` adds plain greedy). DRY and the other
 rules stay in minagi/decode.py's Sampler; the adaptation trace is no longer used for writing.
+- The sample log after the switch (read 2026-11-10): its first 75 blocks at temperature 0.5 (4,587.5M-4,675.3M,
+  loop practice off) against the last 75 greedy blocks before them (4,504.8M-4,586.3M, loop practice on). The
+  weights differ, so the rule and the training are mixed here; the paired rounds above are what isolate the rule.
+  Repeated 8-grams a prompt 10.9% against 23.4% (arithmetic 3.8% against 70.2%, wikipedia 14.5% against 33.8%,
+  the train problem 26.9% against 44.3%, stories 5.4% against 11.7%, code 31.5% against 29.3%); loops 2 of 675
+  texts against 11 (temperature's both in code, a list of numbers cycling; greedy's all arithmetic); legal chess
+  moves 34.6 against 28.3, the fewest 23 against 6; code past its docstring 35 of 75 against 16; arithmetic
+  lines right 89% against 87%. What the model does not know is the same under both: the train problem is never
+  answered 80 km/h (0 of 150), the reasoning prompt never reaches its function within 300 characters, wikipedia
+  invents its dates and places. Asked what it is, the answer's third word is close to a tie between "model" and
+  "metric"; greedy wrote the true self-description in 24 of its 75 blocks, temperature 0.5 in 15 - a threshold
+  on a slowly moving probability, since each prompt's draws reuse one sequence of random numbers, not a
+  frequency. The prompt's own sum is right in all 75 against 46 before (5205 in the other 29): the weights'
+  carry, which no rule could fix.
+
+**E63 order of reading: subjects side by side, or an hour each (2026-11-10, step 2,320,858, 4,752.4M, 424
+experts, on the card while the run was stopped; tools/ab_lanes.py, runs/ab_lanes/2026-11-10/).** Asked whether
+three hours of three subjects learn more read interleaved, as training reads them, or one subject an hour at a
+time - and if one at a time loses, whether 15 minutes interleaved after it wins the difference back. The measure
+is held-out at the end, the arms having read the same characters.
+- How interleaved the reading already is: a visit reads one file, up to `data.passage` (32,768) characters, and
+  most files are shorter, so the subject changes after nearly every document. Mean characters a visit, from the
+  file sizes: wikipedia 5.3K (1.5% of files reach 32K), code 9.7K (2.6%), self-knowledge 13.8K, stories 16.6K
+  (none), chat 16.8K (none), reasoning 18.2K (20.6%), arithmetic and chess 32.8K (all). The passage binds on
+  arithmetic, chess and a fifth of reasoning; a longer one would not keep the reader in one subject longer
+  anywhere else. One subject for long stretches needs reading that stays in a subject across files - phases of
+  their own here.
+- Arms, each a copy of the weights read through train.py in sessions (phases) with the checks off, so the rate
+  stays at the run's x0.00706 (2.1e-6) and the shares are even: chat, code and wikipedia - the three the run reads
+  most (24%, 18%, 16% of its reading) - 7.0M characters each, an hour at the run's 1,950 characters a second.
+  mixed: the three side by side, three phases of 7.0M. blocked: code, then chat, then wikipedia, 7.0M each (chat
+  feeds two of the four held-out subjects, so it sits in the middle). Each then reads 1.75M (15 minutes) of the
+  three side by side. mixed2: mixed again with `data.shuffle_seed` 1, other documents in the same order - how far
+  the documents alone move held-out. Held-out after every phase on the same 120 blocks of every subject; the four
+  the three lanes feed (chat, chat_hermes, code, wikipedia) and the four left unread are reported apart.
+- The reader changed first (11-10, the author's call - a visit ending with its file was not the intended
+  design): a visit is now one subject's stream, files joined by `<|endoftext|>` until the 32,768 are read (train.py
+  `_Lane.open`; a file already ending in the marker gets no second one; the first file's draws are unchanged, so a
+  visit that starts in a long file reads what it always read). On real data every visit then read its 16 chunks,
+  over 2.2 chat files, 4.8 code and 4.5 wikipedia on average (8 at most). The first launch, on the old reader, was
+  stopped 4.2M characters into its first phase; the arms above run on the new one, from 23:02.
+- mixed, first 7.01M (63 min, 1,864 characters a second on these three subjects): held-out on the four subjects
+  the lanes feed -0.0030 +- 0.0005 (paired over the blocks), on the four left unread +0.0002 +- 0.0001, all eight
+  -0.0014 +- 0.0003. Nearly all of it is wikipedia, -0.0111 +- 0.0020 (0.8688 -> 0.8578); chat -0.0008, code
+  -0.0008, chat_hermes +0.0007; of the unread, stories +0.0005 and reasoning +0.0003, arithmetic and chess flat.
+  Experts chosen at least once on held-out: 403 of 424 (406 before).
+- mixed, second 7.01M (1,838 characters a second): the four fed subjects -0.0005 +- 0.0001 more (-0.0035 in all),
+  the unread +0.0002 more (+0.0004), all eight -0.0016 +- 0.0002 in all. chat -0.0012, code -0.0006, chat_hermes
+  -0.0003; wikipedia +0.0001 - none of its first hour came back or went further. Experts chosen 405 of 424.
+- Where wikipedia's first-hour drop sits: its held-out file is pages back to back (one 3 MB stream of the dump's
+  XML), and the old reader never showed a page after a page - a visit ended with its file. Of the 240 held-out
+  chunks, the 35 holding a page boundary fell 0.070 +- 0.006 in the first hour and rose 0.002 in the second; the
+  205 inside a page fell 0.0009 +- 0.0004, then 0.0003. So the drop is the new reader, once, and the order of
+  reading is judged with it in every arm; the reports split wikipedia into the two kinds of chunk.
+- mixed, third 7.01M (1,776 characters a second): the four fed subjects -0.0037 +- 0.0005
+  in all, -0.0013 +- 0.0002 with wikipedia counted inside pages only (block means of the in-page chunks: -0.0006,
+  -0.0012, -0.0013 after each hour); the unread +0.0006 +- 0.0001 (reasoning +0.0008 this hour); all eight
+  -0.0016 +- 0.0002, as after the second hour. chat rose 0.0008 this hour, chat_hermes -0.0007, code -0.0003.
+  At this rate (x0.00706) the third hour of the same three subjects bought almost nothing.
+- mixed, its last 1.75M (the same three side by side, 1,818 characters a second): +0.0002 on the fed subjects.
+  mixed at the end, 22.81M: the fed four -0.0035 +- 0.0005, -0.0012 +- 0.0002 with wikipedia inside pages only
+  (its boundary chunks -0.067); the unread four +0.0007 +- 0.0001; all eight -0.0014 +- 0.0002. blocked started
+  02:56 from the same weights (code first).
+- blocked, code alone for 7.01M (1,940 characters a second): code -0.0021 +- 0.0002 - more than mixed's whole
+  three hours did for it (-0.0017 over the same 7.0M of code) - chat -0.0004, chat_hermes +0.0023, wikipedia
+  +0.0012 inside pages and +0.0032 on its boundaries; the unread four +0.0001 (stories +0.0006). The fed four
+  +0.0003 +- 0.0001, all eight +0.0002 +- 0.0001.
+- Speed: code alone read at 1,939 characters a second against 1,893 for code inside mixed's first hour, which
+  looked like the cost of switching subjects - it was not: mixed2 (below) read the same mix at 1,928, its steps
+  as fast as the blocks'. Changing subject every 32,768 characters costs no measurable speed.
+- blocked, then chat alone for 7.01M (1,925 characters a second):
+  chat -0.0010, chat_hermes -0.0045, code +0.0004 of its gain back, wikipedia -0.0004 inside pages, reasoning
+  +0.0011, stories -0.0002. After 14.02M: the fed four -0.0011 +- 0.0001 - as far as mixed got at the same point
+  with wikipedia inside pages only (-0.0012), though blocked has not read wikipedia yet - the unread four
+  +0.0004, all eight -0.0004. blocked minus mixed at 14.02M, paired: chat_hermes -0.0026 +- 0.0003, code -0.0003,
+  stories -0.0003, chat +0.0007, reasoning +0.0004, wikipedia +0.0119 (its boundaries, still unread).
+- blocked, then wikipedia alone for 7.01M (1,923 characters a second): wikipedia -0.0033
+  inside pages (mixed's three hours: -0.0019) and -0.067 on its boundaries, as mixed; but chat_hermes +0.0048,
+  code +0.0030 - code now 0.0013 worse than before its own hour of code - reasoning +0.0022, stories +0.0011.
+  The last subject read is the one held; the hour of wikipedia took back what the earlier hours taught.
+- Equal characters, 21.04M (7.0M of each subject in both): blocked minus mixed, paired - the fed four +0.0015 +-
+  0.0002, the unread four +0.0006 +- 0.0001, all eight +0.0011 +- 0.0001; by subject chat_hermes +0.0030, code
+  +0.0030, reasoning +0.0018, stories +0.0007, chat -0.0001, wikipedia +0.0001. Read side by side wins; the
+  15-minute shake after blocked comes next.
+- The shake, 1.75M of the three side by side after blocked (1,878 characters a second): code -0.0025, chat_hermes
+  -0.0024, reasoning -0.0011 though no arm reads it, stories -0.0003; all eight -0.0008 +- 0.0001 in a quarter
+  of an hour. The hours of one subject had not erased what came before - a short mixed stretch brought it back.
+- At the end, 22.81M each: blocked-then-shake minus mixed, paired - the fed four -0.0000 +- 0.0001, the unread
+  four +0.0002 +- 0.0001, all eight +0.0001 +- 0.0001; by subject chat -0.0005, wikipedia -0.0004, chess -0.0003,
+  code +0.0003, chat_hermes +0.0005, reasoning +0.0007, stories +0.0002. A tie on final held-out.
+  mixed2 (shuffle_seed 1) started 06:35 from the same weights: how far other documents alone move these numbers.
+- mixed2, first 7.01M (1,928 characters a second): the fed four -0.0033, all eight -0.0016; mixed2 minus mixed
+  after the same hour, paired: all eight -0.0002 +- 0.0001, but chat -0.0009 +- 0.0002 and code -0.0004 - other
+  documents move a single subject further than the blocks' standard error says. Its steps past a visit's first
+  took 1,100 / 1,070 / 1,080 ms (chat / code / wikipedia), against 1,086 / 1,079 / 1,087 read alone and 1,141 /
+  1,101 / 1,116 in mixed's first hour, which slowed further each hour (1,147 / 1,138 / 1,171 in its third) - mixed
+  read slowly for reasons of its own hours, not its order.
+- mixed2, second 7.01M (1,929 characters a second; 1,087 / 1,071 / 1,088 ms a step): all eight -0.0015, the fed
+  four -0.0032. mixed2 minus mixed at 14.02M: all eight +0.0001 +- 0.0001, the fed four +0.0003, chat now +0.0005
+  (it was -0.0009 an hour before). Two runs of one order differ by at most 0.0002 on all eight and 0.0003 on the
+  fed four so far; a single subject wanders by up to 0.0009.
+- mixed2, third 7.01M (1,922 characters a second; 1,084 / 1,082 / 1,094 ms a step): all eight -0.0016, the fed
+  four -0.0039, -0.0015 with wikipedia inside pages only, the unread four +0.0007. mixed2 minus mixed at 21.04M:
+  all eight -0.0000 +- 0.0001, the fed four -0.0001, the unread +0.0000; chat -0.0013 and chat_hermes +0.0011,
+  the two subjects the chat lane feeds moving opposite ways. blocked minus mixed2 at 21.04M: all eight +0.0011 +-
+  0.0001, the fed four +0.0016, the unread +0.0006 - what it was against mixed. Over three points the two runs of
+  one order differ by at most 0.0002 on all eight; blocked before its shake is 0.0011 behind either.
+- mixed2, its last 1.75M (1,895 characters a second): all eight +0.0000. The quarter hour side by side that
+  brought blocked back 0.0008 bought nothing after side by side - in blocked it was recovery, not new learning.
+  mixed2 at the end, 22.81M: the fed four -0.0039 +- 0.0005, -0.0016 with wikipedia inside pages only, the unread
+  four +0.0007, all eight -0.0016 +- 0.0003. mixed2 minus mixed at the end: all eight -0.0002 +- 0.0001, the fed
+  four -0.0004, the unread +0.0001 (chat -0.0016, chat_hermes +0.0009). At the four points the two runs of one
+  order differed on all eight by -0.0002, +0.0001, -0.0000, -0.0002.
+- Final held-out, 22.81M each: blocked-then-shake minus mixed2, all eight +0.0003 +- 0.0001 (the fed four +0.0004,
+  the unread +0.0001); minus the block-wise mean of mixed and mixed2, +0.0002 +- 0.0001 (the fed four +0.0002,
+  the unread +0.0002; code +0.0003, reasoning +0.0005, wikipedia's page boundaries +0.0010).
+- Result: the three side by side, the subject changing every 32,768 characters, gave the best final held-out of
+  what was tried. An hour of each subject in turn ended 0.0011 +- 0.0001 behind at equal characters, against
+  either side-by-side run; 15 minutes side by side after it brought it to +0.0002 of their mean, inside the 0.0002
+  the two side-by-side runs differ by - level, not ahead. What the hours of one subject lost was forgetting: the
+  last subject read held, the others slipped, the unread reasoning and stories too, and a quarter hour side by
+  side brought it back; specializing and then shaking gained nothing over never specializing. Steps took the same
+  time either way (1,070-1,100 ms side by side, 1,079-1,087 alone), so longer stretches of one subject buy no
+  speed. Limits: the run's present rate (x0.00706, held), three subjects, 3.25 hours, even shares; passages
+  shorter than 32,768 and cycles shorter than an hour were not tried.
+
+**E64 what limits the recent exponent (2026-11-11, step 2,343,668, 4,799M, 424 experts, CPU, nothing trained).**
+Read from the check log, the code and saved weights. alpha = -d ln(held-out) / d ln(characters).
+- Start-of-session series: 2,386 -> 3,194M alpha 0.119; 3,194 -> 4,430M 0.081; 4,055 -> 4,430M 0.052; 3,194 ->
+  4,752M 0.069 (seven subjects without arithmetic 0.081). With the easing's own immediate gain taken out
+  (0.15-0.22 nats per unit of scale), the check series gives 0.085-0.09 over 1.25-3.2B and 0.044-0.046 over
+  3.4-4.43B. Wikipedia and code keep their exponents, the rest flatten (shares of characters since 4,067.6M
+  are part of that).
+- The controller eases by construction: resting move -0.08 to -0.14% a check, at most +0.08% up, one doubling
+  per confirmed 0.25-nat jump. The logged verdict put through the rule reproduces the rate's path since ~2.0B.
+  The rate fell as D^-2.1 over 2.0-4.76B; at this pace it reaches x0.001 near 7.6B.
+- The deciding number is blind to the rate: over 16 windows (1.0-4.77B) slope/scatter stayed 0.015-0.042 while
+  the rate fell 10.7x.
+- Travel (sum of scale x M chars): whole run 644; 0 -> 2,329M 610; 2,329 -> 4,770M 34 (5.2% for 51% of the
+  characters). Left to the corpus end at the present easing 13; held at x0.0071 23; at x0.028 93.
+- Weights, session start (step 2,320,858) against live (22,298 steps): nothing stuck on fp32 rounding; trunk
+  matrices moved 0.1-0.4%, net/path 0.022-0.039 against 0.038 for a no-signal walk at momentum 0.95 (Nesterov);
+  twelve experts across the admission range within ~10% of the walk; busiest founders' gates +0.005-0.008,
+  newer gates still. Against the 2,329M copy (1.2M steps) the trunk's net/path is 0.008-0.014 against 0.006:
+  consistent drift ~1% of each step (a lower bound).
+- Telemetry: `admits` counts loads onto the card; `recent` is the share of training forwards an expert is
+  admitted in (sums to 32). Admission share by rank: 1.0 busiest, 0.72 at the 5th percentile, 0.12 at the
+  10th, 0.011 median.
+- A visit's first step is a half window that the second step repeats at the same positions (a new FileReader
+  per visit): 16 steps, 63,488 scored positions for 32,768 fresh characters.
+- Checks: 12 min apart for 10 min of reading; 9 written samples (~2,950 chars at ~31.5 char/s, ~94 s) are
+  ~13% of the wall-clock.
+- Reading: the low rate is a likely, unproven part of the fall; saturation, the shares, loop practice, Muon's
+  early gain and unused growth (127 experts born after step 1M carry 1.5% of the choice) share it. Short tests
+  cannot show a higher rate's gain (floor moves in ~2M chars, learning shows after 130-480M).
+- Proposed, not run: (A) enwik9 adaptation at x1, x4, x16 of the present rate; (B) on copies, 60M chars at
+  x0.0071 against x0.028, then two 14M tails at x0.0071 with a 120-block evaluation after each; expected
+  difference 0 (data-limited), ~-0.0003 (crossover), ~-0.0010 (movement-limited); optional arms momentum 0.99
+  against a x2.26 rate arm, and trunk x0.3. Needs a per-phase setting in tools/ab_lanes.py.
+- Ideas beyond the rate, none run (11-11): score the check's samples as capability measures; held-out at
+  top-k 4/6/8/12 (forward only); screen passages by first-chunk loss; `growth.birth_gate_parents` is 0.0 so a
+  newborn starts silent and cannot grow at this rate; spaced replay in place of the immediate second look
+  (chunk 4,096 + delayed re-reading by loss); multi-byte prediction heads; grow the trunk rather than the
+  pool; an episodic store beyond the window at use (PG19, frozen). 7.3 expert loads a step this session.

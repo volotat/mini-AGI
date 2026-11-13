@@ -65,6 +65,7 @@ from minagi.lanes import LaneSchedule
 from minagi.optim import GradSNR
 from minagi import heldout
 from minagi import store as weights_store
+from minagi.tokenizer import SPECIAL_ID
 
 
 def lr_at(step, total, base, warmup, floor_frac=0.1):
@@ -466,14 +467,35 @@ class _Tracer:
               f"({len(self.ids)} chunks of real training)", flush=True)
 
 
+_EOT = SPECIAL_ID["<|endoftext|>"]       # what joins two files in a visit
+
+
+def _ends_in_eot(ids):
+    """Whether a file's ids end with <|endoftext|>, trailing whitespace
+    aside - a packed file of stories already closes its last one."""
+    k = len(ids) - 1
+    while k >= 0 and int(ids[k]) in (9, 10, 13, 32):
+        k -= 1
+    return k >= 0 and int(ids[k]) == _EOT
+
+
 class _Lane:
     """
-    One subject, sampled a window at a time.
+    One subject, sampled a passage at a time.
 
-    Each visit opens a random file and a random offset inside it, then reads
-    one context window forward from there. The window is contiguous on
-    purpose: a lone chunk carries no history, so attention would have nothing
-    to reach back over and the context window would be decoration.
+    Each visit reads `span` characters of one subject as one stream. A random
+    file, from a random offset when it is longer than the visit; when it is
+    shorter, more of the subject's files after it, each joined to the one
+    before by <|endoftext|>, until the visit is full. The stream is contiguous
+    on purpose: a lone chunk carries no history, so attention would have
+    nothing to reach back over and the context window would be decoration -
+    and the window reads across a join the way it reads across the stories
+    packed into one file.
+
+    A visit used to end with its file. Most files are shorter than a passage
+    (a wikipedia visit averaged 5.3K characters of the 32,768), so the subject
+    changed after nearly every document, and every change asks the card for
+    another subject's experts.
     """
 
     def __init__(self, name, paths, rng):
@@ -483,18 +505,25 @@ class _Lane:
 
     def open(self, model, chunk, block, device, span=None):
         """
-        Open a file for this visit.
+        Open this visit's stream.
 
         `block` is the context window; `span` is how much will be read before
         the reader moves to another subject, which may be several windows. The
-        offset has to leave room for the whole visit, not just the first
-        window, or the file runs out part way through and the visit is cut
-        short.
+        offset in a long file has to leave room for the whole visit, not just
+        the first window, or the file runs out part way through and the visit
+        is cut short.
+
+        The reader's `files` says where each file starts in the stream: [path,
+        index of its first character], the first file's at its offset. The
+        draws are a file, then an offset if that file is longer than the
+        visit, then a file at a time while the stream is short - so a visit
+        that starts in a long file draws what it always drew.
         """
         from minagi.stream import FileReader
         from minagi.ingest import as_stream
         span = max(span or block, block)
-        for _ in range(8):                       # a few tries for short files
+        parts, files, n, misses = [], [], 0, 0
+        while n < span + 1 and misses < 8:      # a few tries for bad files
             path = self.paths[int(self.rng.integers(0, len(self.paths)))]
             try:
                 data = as_stream(path)
@@ -504,16 +533,32 @@ class _Lane:
                 # source, which deletes and rewrites every file in it, and the
                 # path list was taken at startup. A vanished file is a reason
                 # to pick another one, not to end a week of reading.
+                misses += 1
                 continue
             if len(data) < 8:
+                misses += 1
                 continue
-            r = FileReader(model, data, path, chunk, block, device)
-            if len(data) > span + 1:
+            if not parts and len(data) > span + 1:
+                r = FileReader(model, data, path, chunk, block, device)
                 r.pos = int(self.rng.integers(0, len(data) - span - 1))
-            self.r = r
-            self.visits += 1
-            return r
-        return None
+                r.files = [[path, r.pos]]
+                self.r = r
+                self.visits += 1
+                return r
+            if parts and not _ends_in_eot(parts[-1]):
+                parts.append(np.array([_EOT], dtype=data.dtype))
+                n += 1
+            files.append([path, n])
+            parts.append(data)
+            n += len(data)
+        if not parts:
+            return None
+        data = np.concatenate(parts)[:span + 1]
+        r = FileReader(model, data, files[0][0], chunk, block, device)
+        r.files = files
+        self.r = r
+        self.visits += 1
+        return r
 
     def rest(self, model):
         """
@@ -640,10 +685,11 @@ def _window_gain(by_pos, ctx, chunk):
 
 
 def _visit_chunks(ctx, chunk, passage):
-    """How many chunks make up one visit to a file.
+    """How many chunks make up one visit to a subject.
 
     `passage` is in characters and says how far the reader walks through
-    one file before moving to another subject. The window slides along it
+    one subject - a file, or files joined (_Lane.open) - before moving to
+    another. The window slides along it
     a chunk at a time, so a visit is passage/chunk steps - and it must be
     at least one window, or the window never fills and the model is asked
     to read with less context than it has.
@@ -1142,9 +1188,10 @@ def cmd_read(args):
     fixed = _lane_weights(getattr(args, "lane_weights", ""),
                           [l.name for l in lanes])
     mode = "fixed" if fixed else getattr(args, "lane_schedule", "auto")
-    # what each lane holds, and what one visit to it reads: a passage, or a
-    # shorter file whole - which turns a saved share of visits into the share
-    # of characters it was (LaneSchedule.restore)
+    # what each lane holds, and what one visit to it read while a visit ended
+    # with its file: a passage, or a shorter file whole - which turns a share
+    # of visits saved back then into the share of characters it was
+    # (LaneSchedule.restore)
     span = _visit_chunks(ctx_now, args.chunk, args.passage) * args.chunk
     sizes, per_visit = {}, {}
     for l in lanes:
@@ -1173,10 +1220,10 @@ def cmd_read(args):
     print(f"  {sched.describe()}", flush=True)
     lane_of = {l.name: l for l in lanes}
     # How long a subject is read for before the next one: --passage
-    # characters of one file, and never less than a window. A window never
-    # spans two subjects - each visit reads one file, and its window ends at
-    # that file's cursor - because attention across the seam where chess
-    # becomes Python teaches nothing.
+    # characters of it, file after file, and never less than a window. A
+    # window never spans two subjects - each visit reads one subject's
+    # stream, and its window ends at that stream's cursor - because attention
+    # across the seam where chess becomes Python teaches nothing.
     def visit_chunks(ctx):
         """_visit_chunks with this run's chunk and passage."""
         return _visit_chunks(ctx, args.chunk, args.passage)
@@ -1427,14 +1474,20 @@ def cmd_read(args):
                     # loss trained on, and the model's own part of it - the
                     # number held-out reads, without the router's terms
                     ml = getattr(r, "model_loss", None)
+                    row = {"step": step, "lane": lane.name, "file": path,
+                           "pos": getattr(r, "pos", None), "j": j,
+                           "loss": round(float(loss), 6),
+                           "model": (round(float(ml), 6) if ml is not None
+                                     else None),
+                           "t": round(time.time(), 2)}
+                    # a visit of several files: where each starts in the
+                    # stream `pos` counts in, once, so the text can be put
+                    # back together
+                    files = getattr(r, "files", None) or []
+                    if j == 0 and len(files) > 1:
+                        row["files"] = files
                     loss_log.write(json.dumps(
-                        {"step": step, "lane": lane.name, "file": path,
-                         "pos": getattr(r, "pos", None), "j": j,
-                         "loss": round(float(loss), 6),
-                         "model": (round(float(ml), 6) if ml is not None
-                                   else None),
-                         "t": round(time.time(), 2)},
-                        separators=(",", ":")) + "\n")
+                        row, separators=(",", ":")) + "\n")
                 if practice_every and (step + 1) % practice_every == 0:
                     # One more step, on a real span of this window written
                     # out again. Nothing is read, so the cursor, the
@@ -2475,9 +2528,10 @@ def main():
                     help="experts held in VRAM; the rest stay on disk")
     rd.add_argument("--passage", type=int,
                     default=_cfg(_c, "data.passage", 65536),
-                    help="contiguous characters read from one file before "
-                         "moving to another subject; the window slides along "
-                         "it a chunk at a time. Distinct from model.context_end, "
+                    help="contiguous characters read from one subject - a "
+                         "file, or files joined by <|endoftext|> - before "
+                         "moving to another; the window slides along it a "
+                         "chunk at a time. Distinct from model.context_end, "
                          "which is how far the model sees and how far the "
                          "gradient reaches")
     rd.add_argument("--lane-schedule", choices=("auto", "equal"),

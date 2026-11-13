@@ -146,9 +146,9 @@ t = s.targets()
 check("...and reaches the targets in time",
       all(abs(s.shares[k] - t[k]) < 0.005 for k in LANES))
 
-# reading: a visit is one file's passage, and what it holds differs by
-# subject - a chess or arithmetic file fills the whole passage, a wikipedia
-# article a sixth of it
+# reading: what a visit holds may differ by subject - a visit used to end
+# with its file, and a chess or arithmetic file filled the whole passage, a
+# wikipedia article a sixth of it
 HOLDS = {"arithmetic": 32768, "chat": 16827, "chess": 32754,
          "self-knowledge": 13794, "wikipedia": 5324}
 

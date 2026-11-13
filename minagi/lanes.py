@@ -44,14 +44,15 @@ is forgotten and interleaving is what keeps it; none above three times an
 even share. Shares move at most STEP a check, so a change is spread over
 hours and the held-out the rate controller steers by is never jolted.
 
-THE SHARES ARE OF CHARACTERS, as the rule values characters. A visit is one
-file's passage - a short file read whole - so a visit to chess or
-arithmetic holds about six times the characters of one to wikipedia. Visits
-are chosen by smooth weighted round-robin in characters: whatever a visit
-reads, every subject gains its share of those characters in credit and the
-subject read pays them back, and the next visit goes to the subject with the
-most credit. A subject of long files is visited less often and reads as much,
-the proportions are exact, and no subject waits long. A visit that reads
+THE SHARES ARE OF CHARACTERS, as the rule values characters. A visit is a
+passage of one subject - its files joined until the passage is full - so
+visits are about the same size; one that read less, a session ending part
+way through it, is charged what it read. Visits are chosen by smooth weighted
+round-robin in characters: whatever a visit reads, every subject gains its
+share of those characters in credit and the subject read pays them back, and
+the next visit goes to the subject with the most credit. A subject whose
+visits read more is visited less often and reads as much, the proportions
+are exact, and no subject waits long. A visit that reads
 nothing - every file it tried had gone - is charged as a full one, so the
 reader moves on.
 """

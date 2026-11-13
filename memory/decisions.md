@@ -132,6 +132,9 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
 ## Data and lanes
 
 - SETTLED: a file is one document, a subject is a top-level folder.
+- CHANGED (11-10, the author's call): a visit reads one subject as one stream - files joined by
+  `<|endoftext|>` until the passage (32,768) is full - so the subject changes once a passage, as intended, keeping its
+  experts on the card. Before, a visit ended with its file and most files are shorter (E63).
 - SETTLED: reading shares are automatic (10-18; the author wanted them to set themselves, with no flag to
   turn on): worth = sum(|alpha| L)/D per lane, shares in [1/4, 3] of even, <= 5% a check. `--lane-schedule equal` and
   `--lane-weights` exist as overrides. The shares are of characters (11-03, the author's call; they had been

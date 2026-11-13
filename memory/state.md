@@ -31,9 +31,18 @@ auto regions). timeline.md has the run's history session by session.
   0.5661 over the 147M characters since it began (wikipedia +0.0185), ~+0.004 against the course before it.
   The training line's two steps (2,329.0M, 4,067.6M) are changes of the reading mix, not of the model (E61).
   The author turned practice off (`training.loop_practice_every` 0) from the next start.
-- 2026-11-09 (agent, uncommitted): the model writes at temperature 0.5 (`decoding`, E62), in chat from serve's
-  next reply and in the sample log from the run's next start, which writes `[written]` alone
-  (`samples.readings`); the run was stopped for the measurements at step 2,239,774.
+- 2026-11-09 (agent, in f2839b6): the model writes at temperature 0.5 (`decoding`, E62), in chat from serve's
+  next reply and in the sample log since the run's start at 16:41 that day (step 2,239,774), which writes
+  `[written]` alone (`samples.readings`). Its first 75 blocks against greedy's last 75: the end of E62.
+- 2026-11-10 (agent, uncommitted): a visit reads one subject as one stream, its files joined by `<|endoftext|>`
+  until the passage is full (train.py `_Lane.open`), from the run's next start; before, a visit ended with its
+  file. The loss log lists a visit's files at its first step. The run was stopped at step 2,320,858 for E63,
+  which ended 2026-11-11.
+  Expect wikipedia's held-out to drop about 0.011 in the first hours after that start: its held-out file is pages
+  back to back, the old reader never showed a page after a page, and on the new one the held-out chunks that cross
+  a page boundary fell 0.070 in an hour while chunks inside a page fell 0.0009 (E63). The automatic shares read
+  the drop as a steeper slope: simulated from the saved schedule, wikipedia's share goes 16% -> about 21% over
+  two to four days and is still about 19% after eight.
 
 - d_model 512, 8 heads, 2 dense prelude blocks (SwiGLU d_ff 1408), 1 weight-shared recurrent block applied
   up to 24 rows (min 1), PonderNet halting (halt_prior 0.072, ponder_beta 0.01, halt_thresh 0.9),
@@ -69,7 +78,7 @@ auto regions). timeline.md has the run's history session by session.
 ## Lanes
 
 From `runs/corpus_index.json` (files and bytes) and the manifest's `lanes` (10-29). Until 11-03 the schedule
-allocated visits, and a visit is one file's passage of up to 32,768 characters, so a lane's share of the characters
+allocated visits, and a visit was one file's passage of up to 32,768 characters (until 11-10), so a lane's share of the characters
 read followed its visit share times its mean visit length (E47). Shares are of characters from the first start with
 that change: it carries the visit shares it finds over as the characters they gave, then moves toward the targets. Characters read are measured per lane only since the automatic
 schedule began at 2,329.0M; before that the run took equal turns of visits, and the "read" column estimates that
@@ -99,6 +108,8 @@ the share of its text seen.
 - PG19 test split (100 books, 41 MB), 23 Oct weights: frozen 1.995, best effort 1.447. Published byte
   models trained on PG19: MambaByte-972M 0.883, MegaByte 1.000.
 - Held-out scaling exponent over the run 0.188 (R2 0.96); late windows flatter (~0.1).
+  Start-of-session series (E64, 11-11): 0.119 over 2,386-3,194M, 0.081 over 3,194-4,430M, 0.052 over
+  4,055-4,430M.
 - Training cost to date at $0.081/h (RTX 3070 rental price): ~$56 at the 22-23 Oct measurement (~692 h).
 - Re-measure with `./measure_benchmarks.sh` (about a day of the card; only when the author frees it).
 
@@ -109,9 +120,11 @@ the share of its text seen.
 - The controller's floor is x0.001 (the author's request, 2026-10-29; it was x0.01), in force since session 89
   (2026-10-29, 3,492.6M), and the log prints the scale to three figures (x0.00951, not x0.010). Scale x0.0121
   at that session's first check, x0.0109 on 10-31. On a plateau the rate drifts to the floor, so the floor sets
-  the plateau rate (decisions.md). Whether lower actually helps was not measured at these rates: E30 and E29
-  are the evidence (short, at x0.03-0.06); a paired test of x0.012 against x0.004 and x0.0012 on copies would
-  say, when the card is free.
+  the plateau rate (decisions.md). Scale x0.00727 on 11-11 (4,799M). The open question is now whether the
+  rate is too LOW (E64): the rule cannot see a rate that is too low, at this rate the weights move like a
+  walk with no signal, and the short tests (E29, E30) could only show the noise floor falling. Proposed, not
+  run: on copies, 60M chars at x0.0071 against x0.028, then two cool tails; and the enwik9 adaptation gain
+  at x1, x4, x16 of the present rate (both in E64).
 - After the first pass: `python3 -m corpora agent --check`, then the build (~114 GB of disk and ~5 GB of
   RAM by the 2026-10-28 estimate, more disk than was free then). Before running: accept xLAM's terms and
   `hf auth login`; `pip install alfworld`; uv provides Python 3.12 for ARC-AGI-3 (`arc-agi` 0.9.9); set
@@ -171,6 +184,10 @@ the share of its text seen.
   RX 6800 XT.
 - If grad-norm spikes recur: skip steps far above the recent mean, or confirm a passage's loss on a copy
   (E40).
+- The passage (`data.passage`, 32,768): read side by side at it, three subjects ended level with or ahead of an
+  hour of each in turn - 0.0011 ahead at equal characters, level once a 15-minute shake followed the hours -
+  at the same speed (E63, at the present rate). Shorter passages, and specialize-then-shake cycles shorter than
+  an hour, are untested.
 - Known, unfixed (reported 2026-09-27, still in the code 2026-10-28): `PooledMLP.aux` is overwritten at
   every row, so `pool_aux()` (weight 0.01) sees only the last row's value; a gate tensor replaced by growth
   or pruning is re-adopted by `train.py _resync_opt` into a group with weight decay 0 (1-D tensors).

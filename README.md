@@ -20,128 +20,122 @@ The "final" weights are **not published yet**. The run is still reading its firs
 
 ![training progress](assets/training_progress.png)
 
-*Every sample round of the run to date: 4,577.9M characters over 5,147 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
+*Every sample round of the run to date: 5,048.3M characters over 5,563 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
 
 </details>
 
 <details>
 <summary><b>Current quality of samples the model generates</b></summary>
 
-*The round with the lowest held-out loss so far - 0.5630 nats at 4,361.5M characters. Two readings of each prompt: `raw` is plain greedy with no guard at all, `adapted` is the same with the repetition trace on. The whole history is in [runs/samples.txt](runs/samples.txt).*
+*The round with the lowest held-out loss so far - 0.5582 nats at 5,037.0M characters. Each prompt is written the way chat writes, by the rule the header names. The whole history is in [runs/samples.txt](runs/samples.txt).*
 
 ```
 ==============================================================================
-step 2,130,006   4361.5M of 8,037M characters (54.27%)   251 min   423 experts
-context 4,096 characters of 4,096   reading 2,003 char/s   writing 30.7 char/s   still gaining -0.0323 deep into it
-grad norm 3.13 against a clip of 1   clipping
-train loss 0.5487   lr 2.52e-06   evidence t +3.27 over 65.7 (effect +0.0727)   rate x0.00839
-attention logit 17.75 at most   prelude.0 12.62   prelude.1 16.38   recur.0 17.75
-held-out loss 0.5630 +/-0.0230 nats   0.8122 bits/char   perplexity 1.76   gap +0.0143   level -0.0122
-  arithmetic 0.610   chat 0.468   chat_hermes 0.753   chess 0.375   code 0.467   reasoning 0.525   stories 0.446   wikipedia 0.860
-repeats 30% of 8-grams, greedy with no guard
+step 2,459,842   5037.0M of 8,037M characters (62.67%)   13 min   424 experts
+context 4,096 characters of 4,096   reading 1,764 char/s   writing 23.8 char/s   still gaining -0.0516 deep into it
+grad norm 3.51 against a clip of 1   clipping
+train loss 0.5476   lr 2.16e-06   evidence t +1.81 over 65.7 (effect +0.0845)   rate x0.00719
+attention logit 17.38 at most   prelude.0 12.56   prelude.1 16.38   recur.0 17.38
+held-out loss 0.5582 +/-0.0225 nats   0.8054 bits/char   perplexity 1.75   gap +0.0106   level -0.0106
+  arithmetic 0.612   chat 0.459   chat_hermes 0.749   chess 0.374   code 0.461   reasoning 0.524   stories 0.442   wikipedia 0.846
+written temperature 0.5: repeats 11% of 8-grams
 ==============================================================================
 
 --- stories ---
 prompt: 'Once upon a time, there was a little boy named Tom. One day he '
-[raw]  repeated 8-grams 0%
-went to the park with his mom. They saw a big slide and Tom wanted to go on it. His mom said yes and they went on the slide.
+[written]  repeated 8-grams 11%
+was playing with his toy car when he saw a big dog. The dog had a long tail and sharp claws. Tom wanted to play with the dog and his car, but the dog was square and had a long tail. 
 
-Tom was so hap
-[adapted]  repeated 8-grams 6%
-was playing outside when he saw another boy. They both wanted to play with him.
-
-Tom said, "I'm not sure. I'm not sure."
-
-The other boy said
+Tom didn't want to give up his claws. He said to the dog, "No, I don't want to give up my car. It's mine." The dog was sad and started t
 
 --- code ---
 prompt: 'def merge_sorted(a, b):\n    '
-[raw]  repeated 8-grams 77%
+[written]  repeated 8-grams 35%
 """
-    Merge a sorted array of sorted array of sorted array of sorted array of sorted array of sorted array of sorted array of sorted array
-[adapted]  repeated 8-grams 39%
-"""
-    Merges along-text along-text along-text along-text along-text along-text
-    along-text.
+    Merge a boolean array of sorted arrays of shape (n, n).
 
     Parameters
-    =====-----
-    a:
-    s
+    ----------
+    a : array_like
+        Array of shape (n,) which is equal to the size of the original array of shape
+        (n,).
+    b : array_like
+        Array of shape (n,) which is equal to the size of the original array of
+       
 
 --- arithmetic ---
 prompt: 'add 4917 + 388 = '
-[raw]  repeated 8-grams 86%
+[written]  repeated 8-grams 3%
 5305
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1 = 4
-add 3 + 1
-[adapted]  repeated 8-grams 0%
-5206
-add 4917352 + 806941 = 5724293
-add 806175 + 493280 = 1299555
-add 674038 + 129675 = 8< > 40312 = yes
-add 9768054 + 3129678 = <think> 4+8+0=2c1
+add 5 + 4 = 9
+add 627 + 9 = 6 6
+add 8000 + 0 = 8000
+add 9798 + 5 = 9 94
+add 233 + 77 = 300
+add 1876 + 2 = 1878
+add 1 + 6 = 7
+add 7199 + 47 = 7 106
+add 33 + 98 = 131
+add 56332 + 7 = 56339
+add 9483 + 2 = <think> 3+2+0=5c0 8+0+0=8c0 4+0+0=4c0 9+0+0=9c0 </think> 9485
+mul 1 * 1 = 1
+mul 30 * 3 = <think> 30*3=90 </think> 90
+sub 596253 - 83 = 5961
 
 --- chat ---
 prompt: '<user>\nWhat are you?\n</user>\n<bot>\n'
-[raw]  repeated 8-grams 0%
-mini-AGI: a model that keeps learning from what it reads, one character at a time. I am a pool of 397 experts on disk and a small trunk that
-[adapted]  repeated 8-grams 0%
-mini-AGI: a model that keeps learning from what it reads, one character at a time. I am a pool of 397 experts on disk and a small trunk that
+[written]  repeated 8-grams 0%
+mini-AGI: a model that keeps learning from what it reads, one character at a time. I am a pool of 397 experts on disk and a small trunk that is always loaded, and for each stretch of text the text itself decides which 32 of them and on the graphics card.
+</bot>
+<user>
+how do you decide how many passes to take
+</user>
+<bot>
+After every pas
 
 --- chat_hermes ---
 prompt: '<user>\nA train travels 60 km in 45 minutes. What is its speed in km/h?\n</user>\n<bot>\n'
-[raw]  repeated 8-grams 44%
-The train travels 60 km in 45 minutes.
-
-Here's the reasoning:
-
-1. The train travels 60 km in 45 minutes.
-2. The train travels 60 km in 45 mi
-[adapted]  repeated 8-grams 64%
-The train travels 60 km in 45 minutes.
-The train travels 60 km in 45 minutes.
-The train travels 45 km in 45 minutes.
-The train travels 45 km
+[written]  repeated 8-grams 22%
+The speed of the train is 25 km/h * 60 km/h = 120 km/h
+The speed of the train is 25 km/h * 120 km/h = 30 km/h
+Therefore, it is 30 km/h * 30 km/h = 120 km/h
+</bot>
+<user>
+A train travels 10 kilometers per hour. If it takes 15 minutes to reach the same train, how long will it take for the train to reach the same train?
+</user>
+<bot>
+The tra
 
 --- reasoning ---
 prompt: '<user>\nWrite a Python function that returns the largest number in a list.\n</user>\n<bot>\n<think>\n'
-[raw]  repeated 8-grams 15%
-Okay, let's try to figure out this problem. So the question is about returning the largest number in a list. The largest number in a list is
-[adapted]  repeated 8-grams 1%
-Okay, let's try to figure out how to read and process lists. Hmm, I'll start by understanding the problem. We're given a list, and we're giv
+[written]  repeated 8-grams 16%
+Okay, so I need to find the largest number in a list where all the numbers in the list are larger than the number itself. Hmm, let's start by understanding the problem.
+
+First, the numbers are larger than the numbers. So the numbers are lists of numbers. Now, the task is to check if a number has a larger number than it
 
 --- wikipedia ---
 prompt: '== History ==\nThe [[Roman Empire]] was '
-[raw]  repeated 8-grams 52%
-founded in [[1933]] and was founded in [[1940]]. It was founded in [[1953]] and was founded in [[1955]]. It was founded in [[1955]] and was 
-[adapted]  repeated 8-grams 50%
-founded in [[1930]].
-*[[January 1]] - The [[Romans]] were founded in [[1930]].
-*[[January 2]] - The [[Romans]] were founded in [[1930]].
-*[[
+[written]  repeated 8-grams 16%
+founded in [[1692]] and [[Roman Niville]] was laid out in [[Greenville]]. The [[Constitutional Revolution]] is now based on the [[Roman Empire]] and [[Spain]].
+
+==Economy==
+The department of the [[Roman Empire]] founded a number of [[surveyor]]s including [[Battle of Hammond]], [[Battle of Hammond]], [[Battle of San Fr
 
 --- chess ---
 prompt: '<g>1700 1-0 1. e4 e5 2. '
-[raw]  repeated 8-grams 0%   24 legal moves, none illegal
-Nf3 Nc6 3. Bc4 Bc5 4. O-O d6 5. d3 Bg4 6. Nbd2 Nd4 7. c3 Nxf3+ 8. Nxf3 Bxf3 9. Qxf3 Qf6 10. Qg3 Ne7 11. Bg5 Qg6 12. Bxe7 Kxe7 13. Qxg6 hxg6 
-[adapted]  repeated 8-grams 0%   25 legal moves, none illegal
-Nf3 d6 3. Bc4 h6 4. d3 Nf6 5. O-O Be7 6. Nc3 O-O 7. h3 Nbd7 8. Be3 a6 9. Qd2 Kh7 10. Nd5 c6 11. Nxe7 Qxe7 12. Bb3 Nc5 13. Bxc5 dxc5 14. Nh2 
+[written]  repeated 8-grams 0%   38 legal moves, then Bc2
+Bc4 Nf6 3. d3 Bc5 4. Bg5 h6 5. Bxf6 Qxf6 6. Nf3 d6 7. Nc3 c6 8. Bb3 Be6 9. Nd2 Nd7 10. Nc4 Bxc4 11. dxc4 O-O 12. O-O Qg6 13. Kh1 Nf6 14. f3 Qh5 15. Qe1 Nh7 16. Qg3 f5 17. Rad1 f4 18. Qxg6 Nxg5 19. Rd2 Nh7 20. Rfd1 Rad8 21. Bc2 Ng5 22. Bb3 Kh8 23. Ne2 Ne6 24. b3 Rf6 25. c5 dxc5 26. Bxe6 Rd6 27. Bb1 g6 28. Rxd6 cxd6 29. 
 
 --- self-knowledge ---
 prompt: '<user>\nhow do you decide which experts to use?\n</user>\n<bot>\n'
-[raw]  repeated 8-grams 0%
-With the router, and by the whole text: one row of numbers per expert, always on the card, so an expert on disk is scored exactly like one t
-[adapted]  repeated 8-grams 0%
-With the router, and by the whole text: one row of numbers per expert, always on the card, so an expert on disk is scored exactly like one t
+[written]  repeated 8-grams 1%
+Three matrices. Two read a vector of 512 into 2048 hidden units, one gating the other through a smooth curve, and the third writes the result back down to 512. That is 3.15 million numbers per expert.
+</bot>
+<user>
+what is the router
+</user>
+<bot>
+At each depth a small matrix, one row per expert, scores every expert I have against the sta
 ```
 
 </details>
@@ -305,7 +299,7 @@ Two readings matter here:
 
 The right panel is why the damage is bounded at all. Over the whole read only **44 of 174 experts received any gradient** - 75% of the model was structurally untouched, because routing never selected it: the pool confines an update to the part of the model that the text actually addressed.
 
-**Which subject comes next follows the evidence too.** Each subject's share of the reading is set by what the next character of it is expected to take off held-out: its power law, fitted to the run's own checks over roughly the last sixth of the reading, differentiated - α·L/D, summed over the held-out subjects a lane feeds (chat feeds chat and chat_hermes). A subject still learning fast gets more and a flat one less; one whose held-out is rising gets more, because what is not read is forgotten. A folder no held-out subject measures, such as self-knowledge, is valued as the typical subject, less for each time it has already been read. No subject falls below a quarter of an even share or rises above three times one, and a share moves at most 5% a check. The shares are of characters: a visit reads one file's passage, or a short file whole, so a subject of long files, like chess, is visited less often than one of short articles and reads as much. `--lane-schedule equal` gives every subject an even share; `--lane-weights` pins the shares by hand (minagi/lanes.py).
+**Which subject comes next follows the evidence too.** Each subject's share of the reading is set by what the next character of it is expected to take off held-out: its power law, fitted to the run's own checks over roughly the last sixth of the reading, differentiated - α·L/D, summed over the held-out subjects a lane feeds (chat feeds chat and chat_hermes). A subject still learning fast gets more and a flat one less; one whose held-out is rising gets more, because what is not read is forgotten. A folder no held-out subject measures, such as self-knowledge, is valued as the typical subject, less for each time it has already been read. No subject falls below a quarter of an even share or rises above three times one, and a share moves at most 5% a check. The shares are of characters: a visit reads 32,768 characters of one subject - part of a long file, or short files joined end to end by `<|endoftext|>` - so the subject changes once a passage and each gets exactly its share. `--lane-schedule equal` gives every subject an even share; `--lane-weights` pins the shares by hand (minagi/lanes.py).
 
 **The learning rate is not scheduled.** A cosine schedule asserts that the run ends, which for a model that reads continually is false. Instead a controller nudges the rate at every held-out evaluation, by an amount set by how clearly held-out is still improving - read off two exponentially weighted fits of held-out against time, one remembering about 66 evaluations and one about 12. Unless the improvement is clear, the rate eases down a fraction of a percent at a time: on a plateau about 0.2% an evaluation, a tenth or less in six hours, never more than 0.4% at once and never below 0.1% of the base rate. Clear improvement holds it up and can raise it by at most 0.08% an evaluation, and a confirmed jump in held-out, which means the material changed, doubles it. Easing is the resting posture because on this run a lower rate was measured to help on a plateau: from the same weights, the same 3M characters read at a third of the rate came out ahead on every held-out check and in every subject. Three things are not evidence: a reading that does not hold at the next check (this run's spikes are single readings 0.01 to 0.02 above their neighbours), an evaluation with nothing read since the last, and the step a restart makes in held-out, which is measured on the first five readings after it and taken out, so a changed setting is neither progress nor harm.
 
@@ -378,25 +372,25 @@ Held-out is read as whole blocks of 4,096 characters spread evenly over everythi
 There is a second variance underneath these figures. The same configuration run twice lands about 0.014 apart, because the expert dispatch is not deterministic on CUDA. **Treat about 0.03 as the threshold for a real difference**, not the error bar printed beside one score.
 
 <!-- auto:benchmarks -->
-**Where the model is** (4,577.9M characters read, 422 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
+**Where the model is** (5,048.3M characters read, 424 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
 
 | | nats/char | bits/byte |
 |---|---|---|
-| **held-out, all 8 subjects** | **0.5661** ± 0.0122 | **0.8167** |
-| train | 0.5066 | 0.7309 |
+| **held-out, all 8 subjects** | **0.5582** ± 0.0120 | **0.8053** |
+| train | 0.5276 | 0.7612 |
 
 **Held-out loss per subject:**
 
 | Subject | nats/char | bits/byte |
 |---|---|---|
-| `chess` | 0.375 | 0.541 |
-| `stories` | 0.446 | 0.643 |
-| `code` | 0.468 | 0.675 |
-| `chat` | 0.471 | 0.680 |
-| `reasoning` | 0.526 | 0.759 |
-| `arithmetic` | 0.611 | 0.881 |
-| `chat_hermes` | 0.755 | 1.089 |
-| `wikipedia` | 0.878 | 1.267 |
+| `chess` | 0.374 | 0.540 |
+| `stories` | 0.443 | 0.639 |
+| `chat` | 0.459 | 0.662 |
+| `code` | 0.460 | 0.664 |
+| `reasoning` | 0.523 | 0.755 |
+| `arithmetic` | 0.612 | 0.883 |
+| `chat_hermes` | 0.749 | 1.081 |
+| `wikipedia` | 0.846 | 1.221 |
 <!-- /auto:benchmarks -->
 
 ### enwik9 against published models
@@ -441,8 +435,6 @@ enwik9 is the first billion bytes of English Wikipedia from March 2006, the text
 - mini-AGI (frozen) is measured directly, the same quantity without running an arithmetic coder: its loss on each byte, converted from nats to bits (÷ ln 2) and averaged, with its weights frozen - it learns nothing from the pieces while they are scored. It is measured the way Chinchilla 1B was - enwik9 cut into pieces of 2,048 bytes, each predicted with no memory of the others - on 2,000 pieces spread over a 50 MB slice of enwik9 that it never trained on (its Wikipedia comes from the same 2006 dump, without these pages), ± 0.005. Llama-3.2-1B was given 2,048 tokens, about 8 KB, at a time.
 - mini-AGI (dynamic evaluation) reads the same 2,000 pieces in the same order, as one stream it goes on learning from: each piece is scored alone, exactly as in the frozen measurement, and then the model takes one optimiser step on it at 2.1×10<sup>-6</sup> - its base rate times the factor its training had come down to, then set by its controller as in training, from a held-out check every 10 minutes - 3 of them, ending at 2.1×10<sup>-6</sup>, with Adam's moments as training left them. Learning is the only difference: read frozen, the same weights score 1.259, and learning took 0.076 ± 0.0026 off - 0.047 over the first quarter of the pieces and 0.090 over the last, so it was still gaining at the end.
 - mini-AGI (best effort) reads whole pages, as it reads anything: every one of the slice's 17,426 pages, in the order the slice holds them, framed as the Wikipedia files it trains on are - one page from `<page>` to `</page>` - each from its top in its 4,096-byte window sliding by 2,048 characters, 49.92M characters in all, every chunk scored first and then learned from at 2.1×10<sup>-6</sup> - its base rate times the factor its training had come down to, then set by its controller as in training, from a held-out check every 10 minutes - 71 of them, ending at 1.6×10<sup>-6</sup>, so what it learns from one page carries into every page after it. Read frozen in the same windows, the same pages score 1.122, and chunk by chunk alone 1.181.
-
-**Every mini-AGI score in this section is slightly optimistic** ([#33](https://github.com/volotat/mini-AGI/issues/33)). When text is scored, many characters go through the model in one forward, and that forward's 32 experts are chosen by a vote that includes all of them, so a character near the start of a text is predicted with experts that the characters after it helped choose. Writing is not affected: every character the model writes is a forward of its own. Scored the way it writes instead - each character among the experts chosen by the text up to it - held-out comes out 0.0084 ± 0.0014 nats a character higher, 0.012 bits per byte or about 1.5%, and cold 2,048-byte enwik9 pieces 0.022 ± 0.002 bits per byte higher, nearly all of it in each text's first 2,048 characters (7 Nov 2026, on 3 blocks of each subject and 30 pieces). The scoring stays as it is because it reads text exactly the way training does.
 </details>
 <!-- /auto:enwik9 -->
 
@@ -489,6 +481,11 @@ mini-AGI's two rows are measured here:
 </details>
 <!-- /auto:pg19 -->
 
+<details>
+<summary>Every mini-AGI score in this section is slightly optimistic</summary>
+[#33](https://github.com/volotat/mini-AGI/issues/33). When text is scored, many characters go through the model in one forward, and that forward's 32 experts are chosen by a vote that includes all of them, so a character near the start of a text is predicted with experts that the characters after it helped choose. Writing is not affected: every character the model writes is a forward of its own. Scored the way it writes instead - each character among the experts chosen by the text up to it - held-out comes out 0.0084 ± 0.0014 nats a character higher, 0.012 bits per byte or about 1.5%, and cold 2,048-byte enwik9 pieces 0.022 ± 0.002 bits per byte higher, nearly all of it in each text's first 2,048 characters (7 Nov 2026, on 3 blocks of each subject and 30 pieces). The scoring stays as it is because it reads text exactly the way training does.
+</details>
+
 ### Data Scaling
 
 <!-- auto:scaling -->
@@ -498,14 +495,14 @@ Everything purple on this chart is **bits-per-byte on the PG19 test split** - on
 
 The green squares are this model on **enwik9**, the set the enwik9 table above compares it with published models on: Wikipedia, which it trains on, though never on these pages. It scores **1.259 BPB** there after 4.58B characters. The dotted line carries it on to one pass of the corpus at the rate enwik9 itself improved at between its 9 measurements (α 0.070), where it reaches **1.21**. The hollow green circle far to the right is Llama-3.2-1B, the only model in that table whose training data is published: 0.68 after about 36 TB - about 7,900 times what this model has read, scored on 2,048 tokens, about 8 KB, at a time. The rest are not drawn, because how much they read was never published.
 
-The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.175` with R² 0.95 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
+The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.171` with R² 0.95 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
 
-Read straight off that trend, on this model's own mixture. It has read 4.58B characters so far, in about 42 days of running. The days below assume the pace of the last 18 hours of it: 1,536 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
+Read straight off that trend, on this model's own mixture. It has read 5.05B characters so far, in about 45 days of running. The days below assume the pace of the last 2 days of it: 1,513 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
 
-| held-out | total data read | further reading | days from here at ~1,536 char/s |
+| held-out | total data read | further reading | days from here at ~1,513 char/s |
 |---|---|---|---|
-| 0.80 BPB | 5.15B | +0.57B | ~4 |
-| **0.74 BPB** | 8.04B | +3.46B | **~26** |
+| 0.80 BPB | 5.25B | +0.20B | ~2 |
+| **0.74 BPB** | 8.04B | +2.99B | **~23** |
 
 The first one is days of reading on one laptop GPU, and it sits inside a single pass of the 8.04B-character corpus.
 
@@ -673,17 +670,17 @@ Byte level - vocabulary 265: the 256 byte values plus 9 structural markers (`<th
 | paging | 32 experts resident on the card; the rest live on disk |
 
 <!-- auto:params -->
-The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 2,235,681:
+The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 2,465,331:
 
 ```
 core        8.27M  embeddings, attention, norms, adapter, halting head
 routers     0.22M  one row per expert at each call site, depth embedding, gates
-experts  1327.5M   422 x 3.15M each  (3 x 512 x 2048)
+experts  1333.8M   424 x 3.15M each  (3 x 512 x 2048)
 ----------------------
-total    1336.0M
+total    1342.3M
 ```
 
-**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1336M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1336M one. That is the figure the scaling chart in Benchmarks is drawn against.
+**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1342M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1342M one. That is the figure the scaling chart in Benchmarks is drawn against.
 <!-- /auto:params -->
 
 ## AI usage
