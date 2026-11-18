@@ -1,7 +1,7 @@
 # mini-AGI
 
 mini-AGI - is a **continual learning** byte-level language model that assembles its own architecture, trains from scratch on a single 8 GB VRAM GPU, and keeps learning from everything it reads.
-It stores its weights as ordinary files on disk and pages them onto the card as it needs them, so the parameter count is bounded by free disk space rather than by VRAM. It grows new capacity while training when it runs short, prunes what nothing asks for, and reads through exactly the same code path it serves on. Targeted at a PC or laptop with at least an 8 GB VRAM GPU on the board. 
+It stores its weights as ordinary files on disk and pages them onto the card as it needs them, so the parameter count is bounded by free disk space rather than by VRAM. It grows new capacity while training when it runs short, prunes what nothing asks for, and reads through exactly the same code path it serves on. Targeted at a PC or laptop with at least a 6 GB VRAM GPU on the board. 
 
 **NOTE: as of now this is a small toy-level model.** Do not expect a frontier level capabilities. This is rather a small experiment to show, that continual learning from the single stream of data without catastrophic forgetting is possible. Furthermore it is possible on a modest hardware. Which means that almost everyone could train their own version of the model (or simply continue training this one) exactly as they see it fit. And the capabilities would be bounded by the actual hardware, scale and quality of the data available and the amount of time one willing to spend on training the model.
 
@@ -20,122 +20,124 @@ The "final" weights are **not published yet**. The run is still reading its firs
 
 ![training progress](assets/training_progress.png)
 
-*Every sample round of the run to date: 5,048.3M characters over 5,563 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
+*Every sample round of the run to date: 5,631.8M characters over 5,742 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
 
 </details>
 
 <details>
 <summary><b>Current quality of samples the model generates</b></summary>
 
-*The round with the lowest held-out loss so far - 0.5582 nats at 5,037.0M characters. Each prompt is written the way chat writes, by the rule the header names. The whole history is in [runs/samples.txt](runs/samples.txt).*
+*The round with the lowest held-out loss so far - 0.5546 nats at 5,590.6M characters. Each prompt is written the way chat writes, by the rule the header names. The whole history is in [runs/samples.txt](runs/samples.txt).*
 
 ```
 ==============================================================================
-step 2,459,842   5037.0M of 8,037M characters (62.67%)   13 min   424 experts
-context 4,096 characters of 4,096   reading 1,764 char/s   writing 23.8 char/s   still gaining -0.0516 deep into it
-grad norm 3.51 against a clip of 1   clipping
-train loss 0.5476   lr 2.16e-06   evidence t +1.81 over 65.7 (effect +0.0845)   rate x0.00719
-attention logit 17.38 at most   prelude.0 12.56   prelude.1 16.38   recur.0 17.38
-held-out loss 0.5582 +/-0.0225 nats   0.8054 bits/char   perplexity 1.75   gap +0.0106   level -0.0106
-  arithmetic 0.612   chat 0.459   chat_hermes 0.749   chess 0.374   code 0.461   reasoning 0.524   stories 0.442   wikipedia 0.846
-written temperature 0.5: repeats 11% of 8-grams
+step 2,730,126   5590.6M of 8,037M characters (69.56%)   3757 min   425 experts
+context 4,096 characters of 4,096   reading 1,851 char/s   writing 31.4 char/s   still gaining -0.0483 deep into it
+grad norm 3.59 against a clip of 1   clipping
+train loss 0.5518   lr 2.27e-06   evidence t +4.75 over 65.7 (effect +0.1057)   rate x0.00758
+attention logit 18.00 at most   prelude.0 12.50   prelude.1 16.38   recur.0 18.00
+held-out loss 0.5546 +/-0.0223 nats   0.8002 bits/char   perplexity 1.74   gap +0.0028   level -0.0106
+  arithmetic 0.611   chat 0.454   chat_hermes 0.744   chess 0.373   code 0.457   reasoning 0.521   stories 0.442   wikipedia 0.835
+written temperature 0.5: repeats 16% of 8-grams
 ==============================================================================
 
 --- stories ---
 prompt: 'Once upon a time, there was a little boy named Tom. One day he '
-[written]  repeated 8-grams 11%
-was playing with his toy car when he saw a big dog. The dog had a long tail and sharp claws. Tom wanted to play with the dog and his car, but the dog was square and had a long tail. 
+[written]  repeated 8-grams 14%
+was playing with his toy car when he accidentally dropped it on the floor. He looked around and saw a message saying that the magic words were too large for him. 
 
-Tom didn't want to give up his claws. He said to the dog, "No, I don't want to give up my car. It's mine." The dog was sad and started t
+Tom was very sad and asked his mom what was wrong. His mom said that the magic words were too large for him to draw and see all of them. Tom was very upset 
 
 --- code ---
 prompt: 'def merge_sorted(a, b):\n    '
-[written]  repeated 8-grams 35%
-"""
-    Merge a boolean array of sorted arrays of shape (n, n).
+[written]  repeated 8-grams 23%
+"""Merge a sorted array into a sorted array."""
+    a = np.asarray(a)
+    if b is not None:
+        a = np.asarray(b)
+        if not isinstance(a, np.ndarray):
+            a = np.asarray(a)
+        a = a.to_python()
+    a = _asarray(a)
+    return a
 
-    Parameters
-    ----------
-    a : array_like
-        Array of shape (n,) which is equal to the size of the original array of shape
-        (n,).
-    b : array_like
-        Array of shape (n,) which is equal to the size of the original array of
-       
+
+def convert_to_python(tensor):
+    """
+    Convert a single value to 
 
 --- arithmetic ---
 prompt: 'add 4917 + 388 = '
-[written]  repeated 8-grams 3%
+[written]  repeated 8-grams 1%
 5305
 add 5 + 4 = 9
-add 627 + 9 = 6 6
-add 8000 + 0 = 8000
-add 9798 + 5 = 9 94
-add 233 + 77 = 300
-add 1876 + 2 = 1878
-add 1 + 6 = 7
-add 7199 + 47 = 7 106
-add 33 + 98 = 131
-add 56332 + 7 = 56339
-add 9483 + 2 = <think> 3+2+0=5c0 8+0+0=8c0 4+0+0=4c0 9+0+0=9c0 </think> 9485
-mul 1 * 1 = 1
-mul 30 * 3 = <think> 30*3=90 </think> 90
-sub 596253 - 83 = 5961
+add 627 + 92 = 719
+add 400 + 0 = 400
+mul 9 * 8 = 72
+add 35257 + 3 = 35260
+add 9361 + 5 = 9366
+add 51 + 83 = 134
+cmp 199 > 475 = no
+mod 47 % 31 = 16
+add 6 + 6 = 12
+add 90049 + 4 = 90053
+add 302 + 80 = 382
+add 97 + 2 = <think> 7+2+0=9c0 9+0+0=9c0 </think> 99
+sub 5 - 1 = 4
+sub 81 - 6 = 75
+mul 4 * 4 = 16
+add 3 + 4 = 
 
 --- chat ---
 prompt: '<user>\nWhat are you?\n</user>\n<bot>\n'
-[written]  repeated 8-grams 0%
-mini-AGI: a model that keeps learning from what it reads, one character at a time. I am a pool of 397 experts on disk and a small trunk that is always loaded, and for each stretch of text the text itself decides which 32 of them and on the graphics card.
+[written]  repeated 8-grams 1%
+mini-AGI: a model that keeps learning from what it reads, one character at a time. I am a pool of 397 experts on disk and a small trunk that is always loaded, and for each stretch of text the text itself decides which 32 of the experts come onto the graphics card.
 </bot>
 <user>
-how do you decide how many passes to take
+what does one file contain?
 </user>
 <bot>
-After every pas
+Its three weight ma
 
 --- chat_hermes ---
 prompt: '<user>\nA train travels 60 km in 45 minutes. What is its speed in km/h?\n</user>\n<bot>\n'
-[written]  repeated 8-grams 22%
-The speed of the train is 25 km/h * 60 km/h = 120 km/h
-The speed of the train is 25 km/h * 120 km/h = 30 km/h
-Therefore, it is 30 km/h * 30 km/h = 120 km/h
-</bot>
-<user>
-A train travels 10 kilometers per hour. If it takes 15 minutes to reach the same train, how long will it take for the train to reach the same train?
-</user>
-<bot>
-The tra
+[written]  repeated 8-grams 73%
+The speed of the train is approximately 20 km/h. The speed of the train is approximately 20 km/h.
+The speed of the train is approximately 20 km/h.
+The speed of the train is approximately 20 km/h.
+The speed of the train is approximately 20 km/h.
+The speed of the train is approximately 20 km/h.
+#### 20
+The answer is: 20
+
 
 --- reasoning ---
 prompt: '<user>\nWrite a Python function that returns the largest number in a list.\n</user>\n<bot>\n<think>\n'
-[written]  repeated 8-grams 16%
-Okay, so I need to find the largest number in a list where all the numbers in the list are larger than the number itself. Hmm, let's start by understanding the problem.
+[written]  repeated 8-grams 20%
+Okay, so I need to find the largest number in a list where all the numbers in the list are larger than the number of numbers in the list. Hmm, let's start by understanding the problem.
 
-First, the numbers are larger than the numbers. So the numbers are lists of numbers. Now, the task is to check if a number has a larger number than it
+First, let's understand the problem. We have a list of numbers and we need to find the largest number without any repeated numbers whe
 
 --- wikipedia ---
 prompt: '== History ==\nThe [[Roman Empire]] was '
-[written]  repeated 8-grams 16%
-founded in [[1692]] and [[Roman Niville]] was laid out in [[Greenville]]. The [[Constitutional Revolution]] is now based on the [[Roman Empire]] and [[Spain]].
-
-==Economy==
-The department of the [[Roman Empire]] founded a number of [[surveyor]]s including [[Battle of Hammond]], [[Battle of Hammond]], [[Battle of San Fr
+[written]  repeated 8-grams 10%
+founded in [[1692]] and conquered the [[Literature of Israel]]. In [[1699]], the [[Siegel of Israel]] was established in [[South Africa]]. The majority of its military services were struck by [[Israelite].co.uk] for the first time in ser4 and the second time in [[1795]]. In [[1796]], the [[Siegel of Israel] (1796 - 179
 
 --- chess ---
 prompt: '<g>1700 1-0 1. e4 e5 2. '
-[written]  repeated 8-grams 0%   38 legal moves, then Bc2
-Bc4 Nf6 3. d3 Bc5 4. Bg5 h6 5. Bxf6 Qxf6 6. Nf3 d6 7. Nc3 c6 8. Bb3 Be6 9. Nd2 Nd7 10. Nc4 Bxc4 11. dxc4 O-O 12. O-O Qg6 13. Kh1 Nf6 14. f3 Qh5 15. Qe1 Nh7 16. Qg3 f5 17. Rad1 f4 18. Qxg6 Nxg5 19. Rd2 Nh7 20. Rfd1 Rad8 21. Bc2 Ng5 22. Bb3 Kh8 23. Ne2 Ne6 24. b3 Rf6 25. c5 dxc5 26. Bxe6 Rd6 27. Bb1 g6 28. Rxd6 cxd6 29. 
+[written]  repeated 8-grams 0%   18 legal moves, then O-O-O
+Nf3 Nc6 3. d4 d6 4. dxe5 dxe5 5. Qxd8+ Nxd8 6. Nxe5 Bd6 7. Nf3 Nf6 8. Nbd2 Bg4 9. Be2 Bxf3 10. Nxf3 Ne4 11. O-O-O O-O 12. Nd4 Bc5 13. Be2 Bxd4 14. Rxd4 Nf6 15. e5 Nfd7 16. Rxd7 Nxe5 17. Rd8 Raxd8 18. Bf4 Ng6 19. Bg3 Rd2 20. Bxd2 Ne5 21. Be3 Ng4 22. Bg1 Ne5 23. h3 Nc4 24. b3 Nd6 25. Bd3 g6 26. Be3 f5 27. Bf4 Rd8 28. Bxd
 
 --- self-knowledge ---
 prompt: '<user>\nhow do you decide which experts to use?\n</user>\n<bot>\n'
-[written]  repeated 8-grams 1%
+[written]  repeated 8-grams 4%
 Three matrices. Two read a vector of 512 into 2048 hidden units, one gating the other through a smooth curve, and the third writes the result back down to 512. That is 3.15 million numbers per expert.
 </bot>
 <user>
-what is the router
+what does an expert do
 </user>
 <bot>
-At each depth a small matrix, one row per expert, scores every expert I have against the sta
+One expert is a small feed-forward block: 1 layer of 2048 hidden units over a width of 5
 ```
 
 </details>
@@ -211,7 +213,7 @@ Every expert is a file on disk holding its weights and its optimiser moments. Ab
 
 Selection is one rule: **the text chooses**. Every character ranks the **whole pool** with the router - one row per expert, always on the card, so an expert on disk is scored exactly like one in VRAM - and asks for its top 8, each request carrying the probability the router gave it. Every forward's first pass adds its characters' requests to the **vote of its text** - everything read since position 0 - and the forward is admitted the experts its text has voted for most, until the card's 32 slots are full. Every character then routes with the same router over the admitted experts only and takes its top 8 of those, so a character whose request was not admitted gets its best admitted experts instead.
 
-The 32 is what VRAM can hold for training: everything a training forward used has to stay on the card through its backward pass and the optimiser step. In training a window is a text of its own, and the first pass of its 4,096 characters already asks for well over a hundred experts, so the window's 32 are its first pass's most requested. **When the model writes, every character is a forward of its own** that adds its requests to the vote the prompt and the reply so far have cast, and routes among the 32 that whole text has asked for most - the choice a training window over that text would make, cut off at the character being written. The set follows the text as it goes and moves only when the vote does, so a reply loads a new expert now and then rather than at every character, from RAM or from disk.
+The 32 is the `resident` setting, and the card's memory is what limits it: everything a training forward used has to stay on the card through its backward pass and the optimiser step. [Fitting it to your hardware](#fitting-it-to-your-hardware) says what each slot costs. In training a window is a text of its own, and the first pass of its 4,096 characters already asks for well over a hundred experts, so the window's 32 are its first pass's most requested. **When the model writes, every character is a forward of its own** that adds its requests to the vote the prompt and the reply so far have cast, and routes among the 32 that whole text has asked for most - the choice a training window over that text would make, cut off at the character being written. The set follows the text as it goes and moves only when the vote does, so a reply loads a new expert now and then rather than at every character, from RAM or from disk.
 
 Three rules the project holds to:
 
@@ -361,7 +363,7 @@ It is the same path training uses: same chunking, same cache, same gradient step
 | `--lr` | default 5e-5, below a training run: reading should adjust the model, not overwrite it |
 | `--mix ""` | skip the before/after scoring |
 
-Two defaults worth knowing. **Nothing is saved without `--save`**, so a read is a dry run until you decide otherwise. And it scores the held-out mixture before and after, then says plainly if reading your files cost the model ground elsewhere.
+Two defaults worth knowing. **Nothing is saved without `--save`**, so a read is a dry run until you decide otherwise. A dry read works on a copy of `weights/` made of hard links, which takes disk space only for the experts it rewrites and is deleted when the read ends. And it scores the held-out mixture before and after, then says plainly if reading your files cost the model ground elsewhere.
 
 ## Benchmarks
 
@@ -372,25 +374,25 @@ Held-out is read as whole blocks of 4,096 characters spread evenly over everythi
 There is a second variance underneath these figures. The same configuration run twice lands about 0.014 apart, because the expert dispatch is not deterministic on CUDA. **Treat about 0.03 as the threshold for a real difference**, not the error bar printed beside one score.
 
 <!-- auto:benchmarks -->
-**Where the model is** (5,048.3M characters read, 424 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
+**Where the model is** (5,631.8M characters read, 425 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
 
 | | nats/char | bits/byte |
 |---|---|---|
-| **held-out, all 8 subjects** | **0.5582** ± 0.0120 | **0.8053** |
-| train | 0.5276 | 0.7612 |
+| **held-out, all 8 subjects** | **0.5550** ± 0.0118 | **0.8007** |
+| train | 0.5482 | 0.7909 |
 
 **Held-out loss per subject:**
 
 | Subject | nats/char | bits/byte |
 |---|---|---|
-| `chess` | 0.374 | 0.540 |
+| `chess` | 0.373 | 0.538 |
 | `stories` | 0.443 | 0.639 |
-| `chat` | 0.459 | 0.662 |
-| `code` | 0.460 | 0.664 |
-| `reasoning` | 0.523 | 0.755 |
-| `arithmetic` | 0.612 | 0.883 |
-| `chat_hermes` | 0.749 | 1.081 |
-| `wikipedia` | 0.846 | 1.221 |
+| `chat` | 0.455 | 0.656 |
+| `code` | 0.457 | 0.659 |
+| `reasoning` | 0.524 | 0.756 |
+| `arithmetic` | 0.611 | 0.881 |
+| `chat_hermes` | 0.744 | 1.073 |
+| `wikipedia` | 0.833 | 1.202 |
 <!-- /auto:benchmarks -->
 
 ### enwik9 against published models
@@ -495,16 +497,16 @@ Everything purple on this chart is **bits-per-byte on the PG19 test split** - on
 
 The green squares are this model on **enwik9**, the set the enwik9 table above compares it with published models on: Wikipedia, which it trains on, though never on these pages. It scores **1.259 BPB** there after 4.58B characters. The dotted line carries it on to one pass of the corpus at the rate enwik9 itself improved at between its 9 measurements (α 0.070), where it reaches **1.21**. The hollow green circle far to the right is Llama-3.2-1B, the only model in that table whose training data is published: 0.68 after about 36 TB - about 7,900 times what this model has read, scored on 2,048 tokens, about 8 KB, at a time. The rest are not drawn, because how much they read was never published.
 
-The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.171` with R² 0.95 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
+The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.169` with R² 0.95 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
 
-Read straight off that trend, on this model's own mixture. It has read 5.05B characters so far, in about 45 days of running. The days below assume the pace of the last 2 days of it: 1,513 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
+Read straight off that trend, on this model's own mixture. It has read 5.63B characters so far, in about 49 days of running. The days below assume the pace of the last 3 days of it: 1,687 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
 
-| held-out | total data read | further reading | days from here at ~1,513 char/s |
+| held-out | total data read | further reading | days from here at ~1,687 char/s |
 |---|---|---|---|
-| 0.80 BPB | 5.25B | +0.20B | ~2 |
-| **0.74 BPB** | 8.04B | +2.99B | **~23** |
+| 0.80 BPB | 5.66B | +0.03B | 5 hours |
+| **0.75 BPB** | 8.04B | +2.41B | **~17** |
 
-The first one is days of reading on one laptop GPU, and it sits inside a single pass of the 8.04B-character corpus.
+The first one is hours of reading on one laptop GPU, and it sits inside a single pass of the 8.04B-character corpus.
 
 The right panel shows which subjects are still moving. chat, code, reasoning, stories are the steep ones; arithmetic and wikipedia have the shallowest slopes.
 <!-- /auto:scaling -->
@@ -532,7 +534,7 @@ NVIDIA and AMD GPUs both run it, and so does a CPU on its own. Speeds at the set
 | AMD Radeon RX 6800 XT, 16 GB | bf16 | 301 char/s | 15.1 char/s | 7.1 GiB |
 | AMD Ryzen 9 9900X, CPU only | bf16 | 186 char/s | 27.6 char/s | - |
 
-Reading is learning: characters trained on per second. Writing is a reply being generated. The speeds were measured on early snapshots of the weights, with 127-133 experts. Only 32 experts are on the card at a time, so the pool's size barely moves VRAM, but a larger pool still reads more slowly, because less of it fits in RAM and more comes from disk: the current model, 355 experts, reads about 1,310 characters a second on the 3070.
+Reading is learning: characters trained on per second. Writing is a reply being generated. The speeds were measured on early snapshots of the weights, with 127-133 experts. Only 32 experts are on the card at a time, so the size of the pool barely changes how much VRAM the model needs. Measured again on 18 Nov 2026 with 425 experts, it reads about 1,860 characters a second on the 3070 and writes about 25. It never used more than 4.5 GiB of VRAM, so any NVIDIA card from the RTX 30 series on with 6 GB is enough. More on this in [Fitting it to your hardware](#fitting-it-to-your-hardware).
 
 - **NVIDIA** - tested on the RTX 3070 Laptop. Every card from the RTX 30 series on computes bf16 in hardware.
 - **AMD** - needs PyTorch's ROCm build (tested: torch 2.9.1 on ROCm 6.4). The RX 6000 series (RDNA2) has no bf16 arithmetic, so on a card with 14 GB or more the model computes in fp32 by itself: 4.6 times faster than bf16 on the 6800 XT. A card with less stays in bf16, the third row: it peaks at 7.1 GiB, so it fits an 8 GB card, at about a fifth of fp32's speed. On a bigger card `MINAGI_GPU_BF16=1` chooses it, to leave memory for something else. PyTorch ships no fused attention kernels for these cards, so attention is computed in blocks - without the memory blow-up of PyTorch's own fallback.
@@ -540,9 +542,27 @@ Reading is learning: characters trained on per second. Writing is a reply being 
 
 `python3 tools/device_check.py` measures what a particular machine does with the model: which attention kernels it has, bf16 against fp32, and one learning step.
 
+## Fitting it to your hardware
+
+The model isn't tied to the machine it was trained on. Its experts are ordinary files in `weights/`, and three settings in `config.yaml` decide how much of your hardware it uses:
+
+- `pool.resident` (default 32): how many experts sit on the GPU. It is also the most experts one forward pass can use.
+- `pool.ram_cache` (default 384): how many experts are kept in RAM, so they don't have to be read from disk.
+- `growth.max_disk_gb` (default 10): how large the pool may grow on disk.
+
+To move the model to a better machine, copy `weights/` over, adjust these three settings to the new hardware and start the run. Nothing needs converting and no code changes. The same works on the machine you already have: stop the run (it saves when it stops), edit `config.yaml` and start it again, since the settings are read at start-up. The learning-rate controller measures the small jump in held-out loss that a restart causes and leaves it out, so a changed setting doesn't throw it off.
+
+![the same weights on bigger PCs](assets/fitting.gif)
+
+**GPU.** With the default 32 experts on the card, the model never used more than 4.5 GiB of VRAM, even with every step at full depth over the full 4,096-character window. With PyTorch capped as it would be on a 6 GB card, it still ran fine. So any NVIDIA card from the RTX 30 series on with 6 GB or more runs the defaults as they are. Each extra expert on the card costs about 52 MiB, and on an 8 GB card 64 of them fit (6.1 GiB). More experts per forward pass means more characters get the experts they asked for instead of a substitute. It is not faster, though: at 64 the model read about a third slower (1,240 characters a second instead of 1,890), because it loads and trains more experts at every step. Whether 64 learns more per character than 32 hasn't been measured yet.
+
+**RAM.** An expert takes about 19 MB of RAM, so the default 384 is about 7.3 GB. 
+
+**Disk.** At 19 MB an expert, the default 10 GB holds about 529 experts, and the pool is at 425 now. With a bigger disk, raise `max_disk_gb` and the model keeps growing new experts whenever it runs short.
+
 ## Running it
 
-1. Make sure you have an NVIDIA or AMD GPU with at least 8 GB of VRAM - or just a CPU, see [GPU support](#gpu-support) - and Python 3.10 or newer. The reference machine is an RTX 3070 Laptop GPU with 8 GB.
+1. Make sure you have Python 3.10 or newer and a GPU: an NVIDIA RTX 30 series or newer with at least 6 GB of VRAM, or any other NVIDIA or AMD card with at least 8 GB. A CPU alone works too, see [GPU support](#gpu-support). The reference machine is an RTX 3070 Laptop GPU with 8 GB.
 2. Clone the repository:
     ```bash
     git clone <repository-url>
@@ -670,17 +690,17 @@ Byte level - vocabulary 265: the 256 byte values plus 9 structural markers (`<th
 | paging | 32 experts resident on the card; the rest live on disk |
 
 <!-- auto:params -->
-The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 2,465,331:
+The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 2,750,252:
 
 ```
 core        8.27M  embeddings, attention, norms, adapter, halting head
 routers     0.22M  one row per expert at each call site, depth embedding, gates
-experts  1333.8M   424 x 3.15M each  (3 x 512 x 2048)
+experts  1336.9M   425 x 3.15M each  (3 x 512 x 2048)
 ----------------------
-total    1342.3M
+total    1345.4M
 ```
 
-**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1342M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1342M one. That is the figure the scaling chart in Benchmarks is drawn against.
+**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1345M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1345M one. That is the figure the scaling chart in Benchmarks is drawn against.
 <!-- /auto:params -->
 
 ## AI usage

@@ -978,3 +978,42 @@ Read from the check log, the code and saved weights. alpha = -d ln(held-out) / d
   newborn starts silent and cannot grow at this rate; spaced replay in place of the immediate second look
   (chunk 4,096 + delayed re-reading by loss); multi-byte prediction heads; grow the trunk rather than the
   pool; an episodic store beyond the window at use (PG19, frozen). 7.3 expert loads a step this session.
+
+**E65 why the rate stopped falling (2026-11-15, step 2,577,115, 5,277M, the run's log only, nothing trained).**
+- From 2,000M to 4,000M the rate eased 0.08-0.11% a check, with evidence t at or above T_MID 2.2 in 3-24% of
+  checks. Since 4,000M it has held: above T_MID in 52-83% of checks, mean t 1.1-3.2, scale x0.0070 -> x0.0074
+  since 4,750M. FLOOR x0.001 is 7x lower and MAX_MOVE is far from binding: no bound holds it.
+- Cause: the held-out got quieter, not faster. The sd of check-to-check differences was 0.0027-0.0029 at
+  1.5-2.5B, 0.0022 at 2.5-3B and 0.00016-0.00024 since 4B (about 15x lower), while the mean fall per check went
+  from -0.00006 to -0.00002 (3x). Evidence is slope over that scatter, so a quieter model reads as an improving
+  one: the bias T_MID's comment describes, now larger than its 2.2 offset absorbs.
+- The scatter fell in a step when Muon arrived (sessions before and after 3,195M: 0.00164 -> 0.00064 at the
+  same rate x0.0140), then to ~0.0002 by 3,800M while the rate fell only 1.6x.
+- Reading: the hold says nothing about whether x0.0074 is the right rate; the rule still cannot see a rate that
+  is too low (E64). Correcting the bias would resume the easing, the direction E64 found doubtful. Easing
+  returns whenever the wobble rises (a restart, a new lane, births). The rate stays a question for Test B.
+
+**E66 what the tier budgets cost (2026-11-18, step 2,750,252, 5,632M, on a copy, nothing kept).**
+- `train.py read data/train` on a copy: the training mixture, births off (`--grow-k 0`), checks every 2-3
+  minutes. Peak VRAM is the process's, from nvidia-smi every 0.5 s.
+- Deepest step (`--train-steps-mean 0`: every step all 24 rows, window 4,096): 4.50 GiB at `resident` 32 and
+  6.13 GiB at 64, so ~52 MiB a slot over ~2.9 GiB of everything else. With PyTorch's allocator held to 5.5 GiB
+  (a 6 GB card's share) 32 ran without running out. The README's minimum is now 6 GB for NVIDIA from the RTX 30 series on (bf16 in hardware).
+- Regular steps, 12 minutes each from a cold RAM tier, `resident` 32 with `ram_cache` 96 / 384 / 448: reading
+  1,876 / 1,865 / 1,887 char/s, writing 26.6 / 24.2 / 26.2, hit rate at ten minutes 0.55 / 0.88 / 0.87, ~5
+  loads a chunk. `resident` 64 (ram 448): 1,241 char/s (-34%), writing 26.7, ~20 loads a chunk, hit 0.95,
+  6.07 GiB.
+- Reading: the RAM tier's size no longer shows in speed (it was the paging lever in October; since then
+  write-behind, a faster reader and ~5 loads a chunk instead of ~9.6). Admission 64 costs a third of reading
+  speed; what it buys per character is unmeasured. On one card bigger budgets buy room, not speed.
+- Losses across these runs do not compare: checks fall at wall-clock times, and each run inherited the experts
+  the one before wrote back.
+- Side finding: a dry read (no `--save`) writes evicted experts back into the weights directory it is given -
+  399 of 425 files in the copy changed - while the trunk, router and manifest stay unsaved, though the README
+  says `weights/` is untouched. Fixed the same day: a dry read runs on a copy of the weights directory made of
+  hard links, next to it, deleted at exit (train.py `_dry_read_dir`); tests/test_dry_read.py failed before
+  the fix (9 of 15 files changed) and passes after.
+- The README's "Fitting it to your hardware" and assets/fitting.gif are drawn from these runs; the logs and the
+  GIF's renderer are kept in runs/fitting-probe/, which git ignores. The GIF's third PC (16 GB, 192 experts,
+  ~12.7 GiB) is not measured: it is the line through the deepest-step peaks at 32 and 64 (2.86 GiB + 52.3 MiB a
+  slot), drawn striped and labelled as an estimate.

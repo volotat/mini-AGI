@@ -26,6 +26,9 @@ import collections
 import math
 import time
 import argparse
+import atexit
+import shutil
+import tempfile
 from dataclasses import asdict
 
 # BEFORE torch, because the allocator reads this once at CUDA init and ignores
@@ -766,6 +769,122 @@ def confirm_drop(n, wdir, ask=input):
     return False
 
 
+DRY_READ = ".dry-read-"
+
+
+def _dry_read_dir(wdir):
+    """
+    Where a read without --save does its writing.
+
+    A dry read still learns, in memory, and the paged pool writes an expert it
+    trained back to disk whenever RAM has to make room for another - there is
+    nowhere else to keep it. Pointed at weights/, those writes went into the
+    very files a dry read promises to leave alone: a twelve-minute dry read
+    rewrote 399 of the 425 expert files there, while the trunk and the routers,
+    which only --save writes, stayed as they were.
+
+    So a dry read runs on a scratch directory next to the real one, made of
+    hard links. That costs nothing to make, and it is safe because nothing here
+    writes a weights file in place: every write goes to a temporary file that
+    is then renamed over the old name (minagi/store.py, minagi/paged.py). The
+    rename gives the scratch directory a new file and leaves the linked
+    original alone. What the read writes takes disk until it ends - up to the
+    pool's size on a long read - and the directory is deleted when the process
+    exits. Where hard links cannot be made, the files are copied.
+    """
+    real = os.path.realpath(wdir)
+    parent, base = os.path.split(real)
+    prefix = f".{base}{DRY_READ}"
+    _sweep_dry_reads(parent, prefix)
+    try:
+        scratch = tempfile.mkdtemp(prefix=f"{prefix}{os.getpid()}-", dir=parent)
+    except OSError as e:
+        raise SystemExit(
+            f"a read without --save works on a scratch copy next to {real}, "
+            f"and {parent} cannot hold one ({e}). Pass --save to read in "
+            f"place, or point --weights-dir at a copy somewhere writable.")
+    # Registered before the read starts anything, so it runs after all of it
+    # at exit (atexit runs the last registered first) - after the pool's
+    # writer has landed every expert it was handed.
+    atexit.register(_drop_dry_read_dir, scratch, real)
+    if not os.path.exists(os.path.join(real, "core.npz")):
+        return scratch                # no model yet: one is made in the scratch
+    copied = 0
+    for root, _, names in os.walk(real):
+        dst_root = os.path.join(scratch, os.path.relpath(root, real))
+        os.makedirs(dst_root, exist_ok=True)
+        for n in names:
+            src, dst = os.path.join(root, n), os.path.join(dst_root, n)
+            try:
+                os.link(src, dst)
+                continue
+            except OSError:
+                pass
+            if not copied:
+                need = sum(os.path.getsize(os.path.join(r, f))
+                           for r, _, fs in os.walk(real) for f in fs)
+                free = shutil.disk_usage(parent).free
+                if free < need:
+                    raise SystemExit(
+                        f"a read without --save works on a copy of {real}. "
+                        f"Hard links are not possible here and a full copy "
+                        f"needs {need/1e9:.1f} GB, with {free/1e9:.1f} GB "
+                        f"free. Pass --save to read in place.")
+            shutil.copy2(src, dst)
+            copied += os.path.getsize(dst)
+    pool = sum(os.path.getsize(os.path.join(r, f))
+               for r, _, fs in os.walk(os.path.join(real, "experts")) for f in fs)
+    print(f"  without --save this read works on a copy of {base}/ "
+          + (f"({copied/1e9:.1f} GB copied: hard links are not possible here)"
+             if copied else "made of hard links")
+          + f" - {os.path.basename(scratch)}, deleted when it ends", flush=True)
+    free = shutil.disk_usage(parent).free
+    if free < pool:
+        print(f"  (it can write up to {pool/1e9:.1f} GB of experts there "
+              f"before it ends, and the disk has {free/1e9:.1f} GB free)",
+              flush=True)
+    return scratch
+
+
+def _sweep_dry_reads(parent, prefix):
+    """
+    Scratch directories of dry reads that never reached their exit - a kill
+    -9, a crash, a power cut. Their process is gone, so nothing is using them.
+    Only POSIX can ask whether a process is alive without disturbing it.
+    """
+    if os.name != "posix":
+        return
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith(prefix):
+            continue
+        try:
+            pid = int(name[len(prefix):].split("-", 1)[0])
+        except ValueError:
+            continue
+        try:
+            os.kill(pid, 0)
+            continue                   # alive: a dry read still running
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            continue                   # alive, and someone else's
+        shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
+        print(f"  removed {name}, left by a dry read that did not finish",
+              flush=True)
+
+
+def _drop_dry_read_dir(scratch, real):
+    # never the weights themselves, whatever happened before this point
+    if (os.path.realpath(scratch) == os.path.realpath(real)
+            or DRY_READ not in os.path.basename(scratch)):
+        return
+    shutil.rmtree(scratch, ignore_errors=True)
+
+
 def cmd_read(args):
     """
     Point the model at files and let it read them.
@@ -819,6 +938,9 @@ def cmd_read(args):
           + (f", {args.passes} passes" if args.passes > 1 else ""))
 
     wdir = args.weights_dir
+    # Without --save nothing on disk changes: the read runs on a scratch
+    # directory next to the weights, deleted when it ends (_dry_read_dir).
+    run_dir = wdir if args.save else _dry_read_dir(wdir)
     # No model here yet is a model that has not been made yet, not an error.
     # Everything about its shape is in config.yaml, so there is nothing to ask.
     #
@@ -845,8 +967,12 @@ def cmd_read(args):
         else:
             print(f"{wdir} does not exist - creating a fresh model from "
                   f"config.yaml")
-        create(wdir, force=True)
+        if not args.save:
+            print("  (in the scratch copy: without --save it is gone when "
+                  "the read ends)")
+        create(run_dir, force=True)
         print()
+    wdir = run_dir
     model, cfg, pool, man = build_paged(wdir, device, args.resident,
                                         args.ram_capacity, args.context)
     # the best held-out this run has seen, for the optional notifier below.

@@ -128,6 +128,21 @@ and say what is new (conventions.md). E-numbers point into experiments.md.
   kept. REJECTED: write-behind paging thread with lazy moments (no gain, dropped at the author's
   choice); evicted experts written on their own thread were kept for when the pool outgrows RAM.
 - SETTLED: an expert nothing trained is not written back; a load copies only what the card uses.
+- SETTLED (11-18, the author's call): tier budgets and admission stay as they are in code and config; the
+  README's "Fitting it to your hardware" explains changing `resident`, `ram_cache` and `max_disk_gb` by hand when
+  the hardware changes. An automatic default fell on its own rules: every tool that loads the weights would have
+  had to read the admission recorded with them. Measured for the section (E66): ~52 MiB of VRAM a slot at the
+  deepest step (4.5 GiB at 32, 6.1 at 64), so the README's minimum is 6 GB for NVIDIA from the RTX 30 series on; 64 read a third slower;
+  RAM 96 read as fast as the whole pool. If reopened, the direction stands: admission grows with the card (slots
+  and admission as two settings, both defaulting to what the card holds; hardware stated with every result;
+  weights move only to equal or larger cards; merging is separate). Costs that grow with admission: Muon
+  orthogonalises every admitted expert every step (~36 GFLOP in bf16), the balance and prune rules were tuned at
+  32, and the 32-cap is what keeps newborns out (E52). Unmeasured: whether 64 learns more per character than 32
+  (held-out at 32/48/64/96, forward only, would bound it).
+- SETTLED (11-18): a read without --save changes nothing on disk. It runs on a copy of the weights directory made
+  of hard links, next to it, and deletes the copy at exit (train.py `_dry_read_dir`). Hard links are safe only
+  because every write of a weights file goes to a temporary file renamed over the old one (minagi/store.py,
+  minagi/paged.py); a write in place would reach the original through the link, so keep it that way.
 
 ## Data and lanes
 

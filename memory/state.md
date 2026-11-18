@@ -117,10 +117,13 @@ the share of its text seen.
 
 - First pass: keep reading; the author publishes final weights after it. Undertrained snapshot on
   Hugging Face from 12 Oct 2026.
+- A dry read (`train.py read` without `--save`) wrote evicted experts back into the weights directory it was
+  given (E66). Fixed in the working tree on 11-18: it now runs on a hard-linked copy next to the weights,
+  deleted at exit. A --save run is unaffected.
 - The controller's floor is x0.001 (the author's request, 2026-10-29; it was x0.01), in force since session 89
   (2026-10-29, 3,492.6M), and the log prints the scale to three figures (x0.00951, not x0.010). Scale x0.0121
   at that session's first check, x0.0109 on 10-31. On a plateau the rate drifts to the floor, so the floor sets
-  the plateau rate (decisions.md). Scale x0.00727 on 11-11 (4,799M). The open question is now whether the
+  the plateau rate (decisions.md). Scale x0.00742 on 11-15 (5,277M), held since ~4,000M because the held-out got quieter, not faster (E65). The open question is now whether the
   rate is too LOW (E64): the rule cannot see a rate that is too low, at this rate the weights move like a
   walk with no signal, and the short tests (E29, E30) could only show the noise floor falling. Proposed, not
   run: on copies, 60M chars at x0.0071 against x0.028, then two cool tails; and the enwik9 adaptation gain
