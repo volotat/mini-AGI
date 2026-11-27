@@ -20,7 +20,7 @@ The "final" weights are **not published yet**. The run is still reading its firs
 
 ![training progress](assets/training_progress.png)
 
-*Every sample round of the run to date: 6,158.2M characters over 5,904 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
+*Every sample round of the run to date: 6,988.8M characters over 5,919 evaluations; held-out from before the [in-flight corrections](memory/corrections.md) is drawn moved onto today's level.*
 
 </details>
 
@@ -380,25 +380,25 @@ Held-out is read as whole blocks of 4,096 characters spread evenly over everythi
 There is a second variance underneath these figures. The same configuration run twice lands about 0.014 apart, because the expert dispatch is not deterministic on CUDA. **Treat about 0.03 as the threshold for a real difference**, not the error bar printed beside one score.
 
 <!-- auto:benchmarks -->
-**Where the model is** (6,158.2M characters read, 425 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
+**Where the model is** (6,988.8M characters read, 424 experts; held-out measured on the model as it stands, on 30 blocks of 4,096 characters spread over all of each subject):
 
 | | nats/char | bits/byte |
 |---|---|---|
-| **held-out, all 8 subjects** | **0.5525** ± 0.0116 | **0.7971** |
-| train | 0.5811 | 0.8384 |
+| **held-out, all 8 subjects** | **0.5500** ± 0.0115 | **0.7935** |
+| train | 0.5878 | 0.8480 |
 
 **Held-out loss per subject:**
 
 | Subject | nats/char | bits/byte |
 |---|---|---|
-| `chess` | 0.373 | 0.538 |
-| `stories` | 0.444 | 0.640 |
-| `chat` | 0.449 | 0.648 |
-| `code` | 0.454 | 0.655 |
-| `reasoning` | 0.525 | 0.757 |
-| `arithmetic` | 0.611 | 0.881 |
-| `chat_hermes` | 0.739 | 1.066 |
-| `wikipedia` | 0.825 | 1.191 |
+| `chess` | 0.372 | 0.537 |
+| `chat` | 0.439 | 0.633 |
+| `stories` | 0.447 | 0.645 |
+| `code` | 0.449 | 0.648 |
+| `reasoning` | 0.529 | 0.763 |
+| `arithmetic` | 0.624 | 0.900 |
+| `chat_hermes` | 0.727 | 1.049 |
+| `wikipedia` | 0.811 | 1.170 |
 <!-- /auto:benchmarks -->
 
 ### enwik9 against published models
@@ -503,13 +503,13 @@ Everything purple on this chart is **bits-per-byte on the PG19 test split** - on
 
 The green squares are this model on **enwik9**, the set the enwik9 table above compares it with published models on: Wikipedia, which it trains on, though never on these pages. It scores **1.259 BPB** there after 4.58B characters. The dotted line carries it on to one pass of the corpus at the rate enwik9 itself improved at between its 9 measurements (α 0.070), where it reaches **1.21**. The hollow green circle far to the right is Llama-3.2-1B, the only model in that table whose training data is published: 0.68 after about 36 TB - about 7,900 times what this model has read, scored on 2,048 tokens, about 8 KB, at a time. The rest are not drawn, because how much they read was never published.
 
-The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.167` with R² 0.95 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
+The red line is the fitted power law on this model's own held-out, `L ∝ D^-0.164` with R² 0.94 over every point past the warmup - between Kaplan's 0.095 and Chinchilla's 0.28, and it has held for more than a decade of data. How steep it looks depends on where the fit starts, and the band on the chart spans that range.
 
-Read straight off that trend, on this model's own mixture. It has read 6.16B characters so far, in about 53 days of running. The days below assume the pace of the last 4 days of it: 1,671 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
+Read straight off that trend, on this model's own mixture. It has read 6.99B characters so far, in about 59 days of running. The days below assume the pace of the last 2 days of it: 1,567 characters a second on the wall clock, held-out checks and rounds of samples included, because the reading waits for them.
 
-| held-out | total data read | further reading | days from here at ~1,671 char/s |
+| held-out | total data read | further reading | days from here at ~1,567 char/s |
 |---|---|---|---|
-| **0.76 BPB** | 8.04B | +1.88B | **~13** |
+| **0.78 BPB** | 8.04B | +1.05B | **~8** |
 
 The right panel shows which subjects are still moving. chat, code, reasoning, stories are the steep ones; arithmetic and wikipedia have the shallowest slopes.
 <!-- /auto:scaling -->
@@ -693,17 +693,17 @@ Byte level - vocabulary 265: the 256 byte values plus 9 structural markers (`<th
 | paging | 32 experts resident on the card; the rest live on disk |
 
 <!-- auto:params -->
-The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 3,007,321:
+The parameter count moves, because the pool grows and prunes itself while training. `python3 -m minagi.store weights` prints what it is now. At step 3,412,848:
 
 ```
 core        8.27M  embeddings, attention, norms, adapter, halting head
 routers     0.22M  one row per expert at each call site, depth embedding, gates
-experts  1336.9M   425 x 3.15M each  (3 x 512 x 2048)
+experts  1333.8M   424 x 3.15M each  (3 x 512 x 2048)
 ----------------------
-total    1345.4M
+total    1342.3M
 ```
 
-**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1345M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1345M one. That is the figure the scaling chart in Benchmarks is drawn against.
+**VRAM is set by the card's 32 slots, not by the pool.** Only 32 experts are resident at a time - about 109M parameters of the 1342M - which is why the pool can keep growing on an 8 GB card. Per byte the model activates about **345M** parameters - two prelude blocks, then attention and top-8 of the resident experts on each recurrent step, counted at the 12.8 steps training samples its depth around (a character may take up to 24) - so by the 6ND rule it costs the same per byte as a dense 345M byte-level transformer, not a 1342M one. That is the figure the scaling chart in Benchmarks is drawn against.
 <!-- /auto:params -->
 
 ## AI usage
